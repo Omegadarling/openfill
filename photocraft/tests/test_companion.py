@@ -1229,6 +1229,9 @@ class LookTests(unittest.TestCase):
                 ui.ellipsize("RealVisXL V5.0 (fp16, with Fooocus inpaint patch)", ui.fonts(root).body, 120)[-3:], "..."
             )
         finally:
+            root.update_idletasks()
+            ui._cache.clear()
+            ui.FONTS = None
             root.destroy()
 
 

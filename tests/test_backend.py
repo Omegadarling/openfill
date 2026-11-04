@@ -174,6 +174,7 @@ class NoOpenCvFallbackTests(unittest.TestCase):
             mask_png=b"m",
             mode="expand",
             prefill_mode="navier-stokes",
+            reference_images=(),
             work_width=512,
             work_height=512,
         )
