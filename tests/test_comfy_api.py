@@ -22,6 +22,7 @@ class StubState:
         self.history_calls = 0
         self.history_drop = 0  # this many /history requests get no answer (connection closed)
         self.interrupted = False
+        self.queue_changes: list[dict] = []
 
 
 STATE = StubState()
@@ -128,6 +129,9 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/interrupt":
             STATE.interrupted = True
             self._send(200, {})
+        elif self.path == "/queue":
+            STATE.queue_changes.append(json.loads(body))
+            self._send(200, {})
         else:
             self._send(404, {"error": "nope"})
 
@@ -199,6 +203,13 @@ class ComfyClientTests(unittest.TestCase):
             self.client.wait_for("pid-1", 10, time.monotonic() + 20, cancel=cancel, poll_interval=0.05)
         self.assertIn("cancelled", str(ctx.exception))
         self.assertTrue(STATE.interrupted)
+        self.assertEqual(STATE.queue_changes, [{"clear": True}])
+
+    def test_shared_cancellation_deletes_only_its_prompt(self):
+        with self.assertRaisesRegex(ComfyApiError, "cancelled"):
+            self.client.wait_for("pid-1", 10, time.monotonic() + 20, cancel=lambda: True, shared_queue=True)
+        self.assertFalse(STATE.interrupted)
+        self.assertEqual(STATE.queue_changes, [{"delete": ["pid-1"]}])
 
     def test_wait_times_out(self):
         STATE.history_ready_after = 10**6

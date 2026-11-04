@@ -1165,6 +1165,11 @@ class FactsCacheTests(unittest.TestCase):
             self.assertTrue(loaded["cached"])
             self.assertEqual(loaded["models"]["remove"], [("lama-big", "LaMa")])
             self.assertEqual([r["statusText"] for r in loaded["rows"]], ["Installed", ""])  # no stale download
+            self.assertEqual(again._load_cache("local"), {})  # legacy cache has no source
+            facts["source"] = "local"
+            first._save_cache(facts)
+            self.assertTrue(again._load_cache("local")["cached"])
+            self.assertEqual(again._load_cache("different"), {})
             cache.write_text("{not json")
             self.assertEqual(again._load_cache(), {})
 

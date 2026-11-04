@@ -291,6 +291,21 @@ class ComfyClient:
         if prompt_id:
             self._json("POST", "/queue", {"delete": [prompt_id]})
 
+    def cancel_generation(self, prompt_id: str | None, *, shared_queue: bool) -> None:
+        """Cancel according to whether OpenFill manages the server's queue."""
+        if shared_queue:
+            if prompt_id:
+                try:
+                    self.cancel_prompt(prompt_id)
+                except ComfyApiError:
+                    pass
+            return
+        for action in (self.interrupt, self.clear_queue):
+            try:
+                action()
+            except ComfyApiError:
+                pass
+
     def wait_for(
         self,
         prompt_id: str,
@@ -302,6 +317,7 @@ class ComfyClient:
         cancel: Callable[[], bool] | None = None,
         activity_extension: float = 0.0,
         wait_for_queue: bool = False,
+        shared_queue: bool = False,
     ) -> dict:
         """Block until ``prompt_id`` finishes; return ``history[prompt_id]``.
 
@@ -312,9 +328,9 @@ class ComfyClient:
         Uses the websocket for step-level progress (and binary preview frames,
         handed raw to ``preview``) and falls back to polling ``/history`` when
         it is not available. ``cancel()`` is polled every loop; when it
-        returns True only this pending job is removed (a running job is left
-        to finish safely on a shared backend), its result is discarded and
-        :class:`ComfyApiError` ("cancelled") raised. Raises
+        returns True, a managed server is interrupted and its queue cleared.
+        On a shared server only this pending prompt is removed and a running
+        job is left to finish. Either way :class:`ComfyApiError` ("cancelled") is raised. Raises
         :class:`ComfyApiError` on timeout and :class:`ComfyExecutionError`
         on failure.
         """
@@ -345,10 +361,7 @@ class ComfyClient:
                     else:
                         raise ComfyApiError("timed out waiting for the backend")
                 if cancel and cancel():
-                    try:
-                        self.cancel_prompt(prompt_id)
-                    except ComfyApiError:
-                        pass
+                    self.cancel_generation(prompt_id, shared_queue=shared_queue)
                     raise ComfyApiError("cancelled by the user")
                 if ws is not None:
                     try:

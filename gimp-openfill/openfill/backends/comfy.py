@@ -63,9 +63,12 @@ class ComfyBackend(Backend):
         request_timeout: float = 0.0,
         logger=None,
         models_root: Path | str | None = None,
+        *,
+        shared_queue: bool = False,
     ) -> None:
         self.url = url
         self.models_root = Path(models_root) if models_root else None
+        self.shared_queue = shared_queue
         self.client = client or ComfyClient(url)
         self.request_timeout = request_timeout  # 0 = estimate per request
         self.log = logger
@@ -116,11 +119,7 @@ class ComfyBackend(Backend):
         return self._progress
 
     def cancel(self) -> None:
-        if self._prompt_id:
-            try:
-                self.client.cancel_prompt(self._prompt_id)
-            except ComfyApiError:
-                pass
+        self.client.cancel_generation(self._prompt_id, shared_queue=self.shared_queue)
 
     # ------------------------------------------------------------------
 
@@ -276,6 +275,7 @@ class ComfyBackend(Backend):
                 cancel=cancel,
                 activity_extension=0.0 if self.request_timeout else ACTIVITY_EXTENSION,
                 wait_for_queue=bool(model and model.effective_template in workflow.SELECTION_EDIT_TEMPLATES),
+                shared_queue=self.shared_queue,
             )
         except ComfyExecutionError as err:
             if err.is_unsupported_gpu:

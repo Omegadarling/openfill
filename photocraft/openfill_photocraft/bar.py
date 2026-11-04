@@ -152,7 +152,8 @@ class Refresher:
     def __init__(self, service: Service, cache: Path | None = None) -> None:
         self.service = service
         self.cache = cache
-        self.facts: dict[str, Any] = self._load_cache()
+        source = service.app.settings.fibo_source if service.app.settings.remote_fibo else None
+        self.facts: dict[str, Any] = self._load_cache(source)
         if service.app.settings.remote_fibo:
             self.facts.update(hardware=f"{service.app.source_label()} · ComfyUI", gpu_vendor="")
         self._hardware: str | None = self.facts.get("hardware") or None
@@ -163,7 +164,7 @@ class Refresher:
         self.wake = threading.Event()
         threading.Thread(target=self._loop, name="openfill-bar-refresh", daemon=True).start()
 
-    def _load_cache(self) -> dict[str, Any]:
+    def _load_cache(self, source: str | None = None) -> dict[str, Any]:
         """The facts of the last run, so Models and the model list show at once; the first
         look replaces them a moment later."""
         if self.cache is None:
@@ -174,7 +175,7 @@ class Refresher:
             return {}
         if not isinstance(data, dict) or not data.get("comfy_ok"):
             return {}
-        if self.service.app.settings.remote_fibo and data.get("source") != self.service.app.settings.fibo_source:
+        if source is not None and data.get("source") != source:
             return {}
         data["models"] = {k: [tuple(m) for m in v] for k, v in (data.get("models") or {}).items()}
         for row in data.get("rows") or []:
