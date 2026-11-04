@@ -3,4 +3,4 @@
 """OpenFill for PhotoCraft: a companion app that drives a running PhotoCraft over its
 control channel and runs OpenFill's ComfyUI pipeline (the ``openfill`` package)."""
 
-__version__ = "0.11.1-portable.1"
+__version__ = "0.11.2-portable.1"

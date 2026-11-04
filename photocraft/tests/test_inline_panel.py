@@ -131,17 +131,17 @@ class InlinePanelTests(unittest.TestCase):
         self.assertFalse(new_stack.bodies["edit"].winfo_manager())
         self.assertTrue(new_stack.bodies["references"].winfo_manager())
 
-    def test_disclosure_arrows_are_large_in_both_states(self):
+    def test_disclosure_arrows_keep_the_same_size_in_both_states(self):
         stack = self.bar.sections
         toggle = stack.toggles["edit"]
         header = stack.headers["edit"]
         self.assertEqual(int(header.cget("height")), 32)
         expanded = toggle.cget("image")
-        self.assertEqual(int(toggle.tk.call("image", "width", expanded)), 24)
+        self.assertEqual(int(toggle.tk.call("image", "width", expanded)), 12)
         toggle.invoke()
         collapsed = toggle.cget("image")
         self.assertNotEqual(collapsed, expanded)
-        self.assertEqual(int(toggle.tk.call("image", "width", collapsed)), 24)
+        self.assertEqual(int(toggle.tk.call("image", "width", collapsed)), 12)
         self.assertFalse(stack.bodies["edit"].winfo_manager())
         toggle.invoke()
         self.assertEqual(toggle.cget("image"), expanded)

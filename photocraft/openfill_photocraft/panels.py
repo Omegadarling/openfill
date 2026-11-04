@@ -55,7 +55,7 @@ SECTIONS = {
     "generation": "Generation Settings",
 }
 BUSY = ("Downloading", "Waiting", "Installing", "Removing", "Working")
-DISCLOSURE_SIZE = 24  # Three times the previous 8 px title-font glyph advance.
+DISCLOSURE_SIZE = 12  # Half the previous 24 px disclosure icon.
 
 
 def field(parent: tk.Misc, label: str, control_factory, gap: int = 6) -> tuple[tk.Frame, Any]:
