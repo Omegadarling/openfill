@@ -83,11 +83,14 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 #jtext{overflow-wrap:anywhere}
 #jtext.run{font-size:12px;line-height:16px;color:var(--dim)}#jtext.ok{color:var(--ok)}#jtext.bad{color:var(--bad)}#jtext.dimmed{color:var(--dim)}
 #preview{display:block;max-width:100%;max-height:230px;border-radius:4px;margin:4px auto 0}
-.thumbs{display:flex;gap:8px}
-.thumbs button{flex:1;min-width:0;padding:0;border:0;background:transparent;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:12px;color:var(--dim);cursor:pointer}
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:8px}
+.thumbs button{min-width:0;padding:0;border:0;background:transparent;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:12px;color:var(--dim);cursor:pointer}
+.thumbs button:disabled{cursor:default}
 .thumbs button span{display:block;width:100%;padding:2px;border-radius:4px;border:2px solid transparent}
 .thumbs button.on{color:var(--text)}.thumbs button.on span{border-color:var(--accent)}
 .thumbs img{display:block;width:100%;height:72px;object-fit:cover;border-radius:2px;background:var(--line)}
+.variation-actions{display:flex;gap:8px}
+.variation-actions .btn{height:36px;flex:1}
 .list{border:1px solid var(--line);border-radius:4px;display:flex;flex-direction:column}
 .mrow{padding:10px 12px;display:flex;flex-direction:column;gap:8px}
 .mrow+.mrow{border-top:1px solid var(--line)}
@@ -245,14 +248,21 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="bar" id="jbarbox"><i id="jbar"></i></div>
       <div id="jtext"></div>
       <img id="preview" alt="Live preview" hidden>
-      <div class="stack" id="pick" hidden style="padding-top:4px"><div class="label">Pick a variation</div><div class="thumbs" id="thumbs"></div></div>
+      <div class="stack" id="pick" hidden style="padding-top:4px">
+        <div class="label">Results</div>
+        <div class="thumbs" id="thumbs"></div>
+        <div class="variation-actions" id="variation-actions">
+          <button class="btn" data-keep="none">Discard</button>
+          <button class="btn" data-keep="all">Keep all</button>
+          <button class="primary" data-keep="selected">Keep</button>
+        </div>
+      </div>
     </div>
     <div id="notices" class="stack"></div>
   </div>
   <div class="actions" id="tool-actions">
     <button class="primary" id="go">Generate</button>
     <button class="btn" id="cancel" hidden>Cancel</button>
-    <button class="btn" data-keep="none" hidden>Discard</button><button class="btn" data-keep="all" hidden>Keep all</button><button class="primary" data-keep="selected" hidden>Keep</button>
   </div>
 <div class="spacer"></div>
 <div class="foot small">Browser view: the same tools when the panel cannot open a window. Expand uses pixel margins here instead of the drag editor.</div>
@@ -280,7 +290,7 @@ const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0
 const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
-let mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="", remoteFibo=false, backendSource="";
+let mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, pc={}, comfy=true, variations=1, target="image", size=[1024,1024], removal="", variationSet=null, remoteFibo=false, backendSource="";
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
 $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
@@ -521,7 +531,10 @@ $("go").onclick=()=>{if(busy||!$("model").value||$("model").value==="__manage")r
     start("expand",{prompt,negative:"",left:m[0],top:m[1],right:m[2],bottom:m[3],variations,seed:-1,model})}
   else{if(!prompt){say("Describe the image first.","bad");return}const onSel=target==="layer"&&sel;start("txt2img",{prompt,negative:"",width:onSel?0:size[0],height:onSel?0:size[1],variations,seed:-1,model,target})}};
 $("cancel").onclick=()=>post("/api/cancel");
-document.querySelectorAll("[data-keep]").forEach(b=>b.onclick=()=>post("/api/keep",{which:b.dataset.keep}));
+document.querySelectorAll("[data-keep]").forEach(button=>button.onclick=async()=>{
+  try { await post("/api/keep", {which:button.dataset.keep}); }
+  catch (error) { say(error.message, "bad"); }
+});
 
 function presets(){const p=$("presets");if(!doc){p.innerHTML="";return}if(p.dataset.for===doc.name+doc.width+"x"+doc.height)return;p.dataset.for=doc.name+doc.width+"x"+doc.height;p.innerHTML="";const W=doc.width,H0=doc.height;
   const add=(label,fn)=>{const b=document.createElement("button");b.textContent=label;b.onclick=()=>{segPick(p,b);fn().forEach((v,i)=>$("e-"+["left","top","right","bottom"][i]).value=v);expSize()};p.appendChild(b)};
@@ -571,6 +584,45 @@ function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.
     if($("setup-folder"))$("setup-folder").onclick=()=>{openSection("engine");$("s-comfy_dir").focus()};if($("setup-help"))$("setup-help").onclick=()=>window.open("https://github.com/beckettharriman/openfill/blob/main/docs/install.md#openfill-for-photocraft");if($("setup-models"))$("setup-models").onclick=()=>openSection("models")}}
 
 function fmt(s){s=Math.round(s);return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")}
+function showVariations(job) {
+  const names = job.variations || [];
+  const box = $("thumbs");
+  const previous = [...box.children];
+  const set = job.variationSet ?? 0;
+  let prefix = 0;
+  if (set === variationSet) {
+    while (prefix < previous.length && prefix < names.length && previous[prefix].title === names[prefix]) prefix++;
+  }
+  variationSet = set;
+  for (const button of previous.slice(prefix)) {
+    const url = button.querySelector("img").src;
+    if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+    button.remove();
+  }
+  for (let i = prefix; i < names.length; i++) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.title = names[i];
+    button.setAttribute("aria-label", "Variation " + (i+1));
+    button.innerHTML = `<span><img alt=""></span>${i+1}`;
+    button.onclick = async()=>{
+      try { await post("/api/variation", {index:i}); }
+      catch (error) { say(error.message, "bad"); }
+    };
+    box.appendChild(button);
+    fetch(`/api/thumb?i=${i}&t=${Date.now()}`, {headers:H})
+      .then(response=>response.status === 200 ? response.blob() : null)
+      .then(blob=>{if (blob && button.isConnected) button.querySelector("img").src = URL.createObjectURL(blob);})
+      .catch(()=>{});
+  }
+  [...box.children].forEach((button, index)=>{
+    button.disabled = busy;
+    button.classList.toggle("on", index === job.shown);
+    button.setAttribute("aria-pressed", String(index === job.shown));
+  });
+  $("variation-actions").querySelectorAll("button").forEach(button=>button.disabled=busy);
+  $("pick").hidden = names.length === 0;
+}
 async function tick(){
   let s;try{s=await get("/api/state")}catch(e){$("status").textContent="OpenFill stopped";return}
   if(s.remoteFibo&&!remoteFibo){remoteFibo=true;document.querySelectorAll("[data-mode]").forEach(b=>{b.hidden=b.dataset.mode!=="fill";if(!b.hidden)b.textContent="Image Edit"});
@@ -588,26 +640,19 @@ async function tick(){
   if(s.activeModel!==activeId){activeId=s.activeModel||"";fillSelect()}
   const st=!comfy?["Not set up","warn"]:["Ready","ok"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
   context();if(mode==="expand"){presets();expSize()}setupCard(s);
-  const j=s.job;busy=s.busy;jobState=j.state;
+  const j=s.job, running=j.state==="running";busy=s.busy||running;
   $("cancel").disabled=!!j.committing;$("cancel").textContent=j.committing?"Adding result...":"Cancel";
   $("go").disabled=busy||$("model").value==="";
-  const several=j.state==="done"&&j.variations.length>1;
-  $("go").hidden=j.state==="running"||several;$("cancel").hidden=j.state!=="running";document.querySelectorAll("[data-keep]").forEach(b=>b.hidden=!several);
-  $("job").hidden=j.state==="idle";
+  $("go").hidden=running;$("cancel").hidden=!running;
+  showVariations(j);
+  $("job").hidden=j.state==="idle"&&$("pick").hidden;
   if(j.state!=="idle"){$("jtitle").textContent=j.title||j.kind;$("jmodel").textContent=short(j.model||"");
     $("jbar").style.width=(j.fraction*100).toFixed(1)+"%";$("jbarbox").classList.toggle("done",j.state==="done");
     const t=$("jtext");if(j.state==="running"){t.className="run";t.textContent=`${j.text} · ${fmt(j.elapsed)}`}
-    else if(j.state==="done"){t.className="ok";t.textContent=`Done in ${fmt(j.elapsed)}.`+(several?" Pick one, then Keep.":"")}
+    else if(j.state==="done"){t.className="ok";t.textContent=`Done in ${fmt(j.elapsed)}.`}
     else{t.className=j.state==="cancelled"?"dimmed":"bad";t.textContent=j.message}
     if(j.state!=="running")$("preview").hidden=true;
-    else if(j.previewSeq!==lastSeq){lastSeq=j.previewSeq;const r=await fetch("/api/preview?t="+j.previewSeq,{headers:H});if(r.status===200){$("preview").src=URL.createObjectURL(await r.blob());$("preview").hidden=false}else $("preview").hidden=true}
-    $("pick").hidden=!several;
-    if(several){const k=j.variations.join("|")+"#"+j.finished;const b=$("thumbs");if(thumbsFor!==j.variations.join("|")){thumbsFor=j.variations.join("|");b.innerHTML="";
-        for(let i=0;i<j.variations.length;i++){const x=document.createElement("button");x.type="button";x.setAttribute("aria-label","Variation "+(i+1));
-          x.innerHTML=`<span><img alt="Variation ${i+1}"></span>${i+1}`;x.onclick=()=>post("/api/variation",{index:i});b.appendChild(x);
-          fetch(`/api/thumb?i=${i}&key=${encodeURIComponent(KEY)}&t=${Date.now()}`,{headers:H}).then(r=>r.status===200?r.blob():null).then(bl=>{if(bl)x.querySelector("img").src=URL.createObjectURL(bl)})}}
-      [...$("thumbs").children].forEach((x,i)=>x.classList.toggle("on",i===j.shown));void k}
-    else thumbsFor=""}
+    else if(j.previewSeq!==lastSeq){lastSeq=j.previewSeq;const r=await fetch("/api/preview?t="+j.previewSeq,{headers:H});if(r.status===200){$("preview").src=URL.createObjectURL(await r.blob());$("preview").hidden=false}else $("preview").hidden=true}}
   $("notices").innerHTML=(j.notices||[]).map(n=>`<div class="context" style="color:${C.warn}">${svg("warn",C.warn,14)}<span>${esc(n)}</span></div>`).join("");
 }
 

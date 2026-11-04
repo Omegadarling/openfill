@@ -132,7 +132,7 @@ Select an area in PhotoCraft (Marquee, Lasso, Object Selection), then type what 
 | Expand | Grows the canvas: drag the frame's edges, or pick a ratio (Original adds 25 % on each side; 1:1, 5:4, 4:3, 3:2 and 16:9, landscape or portrait). It paints the new edges. |
 | Create | Text to Image as a new image (square, landscape or portrait), or as a layer in the open image. With a selection, the layer fills the selection. |
 
-While it works you see a live preview. With several variations, click the thumbnails to compare them in PhotoCraft, then **Keep**, **Keep all** or **Discard**.
+While it works you see a live preview. Click the result thumbnails to compare the edits in PhotoCraft. In Image Edit or Fill, click **Generate** again on the same document to add to the pending choices. The earlier choices stay visible while the new batch runs. Use **Keep**, **Keep all**, or **Discard** directly below the thumbnails to resolve the set.
 
 Every result is a new layer with a mask (variations go into a group), and it is **one step** in PhotoCraft's history: one Undo takes a fill or a whole expand back. Keep leaves it one step, and Discard takes it back completely. Your selection stays as it was, and the clipboard is never touched.
 

@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Exercise the native sections and attachments without connecting to PhotoCraft or ComfyUI."""
 
+import io
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from threading import Lock
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -202,6 +204,75 @@ class InlinePanelTests(unittest.TestCase):
         bar.prompt.on_submit()
         self.assertEqual(self.service.start.call_args.args[1]["generation_settings"], {"fibo_boundary_strength": 72})
         self.assertEqual(bar.settings_view.generation_options(), {})
+
+    def test_pending_results_stay_in_view_and_generate_remains_available(self):
+        bar, service = self.bar, self.service
+        image = Image.new("RGBA", (8, 12), "red")
+        layer = SimpleNamespace(origin=SimpleNamespace(width=8, height=12), rgba=image.tobytes())
+        service.layers = [layer]
+        st = {
+            "state": "done",
+            "title": "Generative Fill",
+            "kind": "fill",
+            "model": "Qwen",
+            "elapsed": 6,
+            "text": "Done",
+            "fraction": 1.0,
+            "variations": ["First"],
+            "shown": 0,
+            "variationSet": 1,
+        }
+        service.state.snapshot.return_value = st
+        bar._update()
+        self.assertEqual(len(bar.thumb_cells), 1)
+        first = bar.thumb_cells[0]
+        self.assertEqual(first.itemcget("selected", "state"), "normal")
+        self.assertEqual(bar.thumbs.pack_slaves()[-2:], [bar.thumb_row, bar.keep_button.master])
+        self.assertEqual(
+            bar.keep_button.master.pack_slaves(), [bar.discard_button, bar.keep_all_button, bar.keep_button]
+        )
+        self.assertEqual(bar.actions.pack_slaves(), [bar.go])
+        self.assertFalse(bar.go.disabled)
+
+        def start(_kind, _params):
+            service.busy.return_value = True
+            st.update(state="running", elapsed=3, text="Sampling", fraction=0.5, previewSeq=1)
+
+        preview = io.BytesIO()
+        image.save(preview, format="PNG")
+        service.state.lock, service.state.preview = Lock(), preview.getvalue()
+        service.start.side_effect = start
+        bar.prompt.set("Make it blue.")
+        bar.go.invoke()
+        service.start.assert_called_once()
+        service.keep.assert_not_called()
+        self.assertEqual(bar.actions.pack_slaves(), [bar.cancel_button])
+        self.assertIs(bar.thumb_cells[0], first)
+        self.assertTrue(bar.keep_button.disabled)
+        self.assertEqual(bar.progress.value, 0.5)
+        self.assertEqual(bar.job.inner.pack_slaves()[-2:], [bar.preview, bar.thumbs])
+
+        service.layers += [layer] * 5
+        service.busy.return_value = False
+        st.update(state="done", fraction=1.0, variations=["First", *map(str, range(2, 7))])
+        bar._update()
+        self.assertEqual(len(bar.thumb_cells), 6)
+        self.assertEqual(int(bar.thumb_cells[5].grid_info()["row"]), 1)
+        self.assertEqual(bar.thumb_cells[0].itemcget("selected", "state"), "normal")
+        self.assertEqual(bar.actions.pack_slaves(), [bar.go])
+        self.assertFalse(bar.keep_button.disabled)
+
+        last = bar.thumb_cells[5]
+        service.layers.append(layer)
+        st["variations"].append("7")
+        bar._update()
+        self.assertEqual(len(bar.thumb_cells), 7)
+        self.assertIs(bar.thumb_cells[5], last)
+        st.update(state="cancelled", message="Cancelled", shown=5)
+        bar._update()
+        self.assertIs(bar.thumb_cells[5], last)
+        self.assertEqual(last.itemcget("selected", "state"), "normal")
+        self.assertEqual(bar.actions.pack_slaves(), [bar.go])
 
 
 if __name__ == "__main__":

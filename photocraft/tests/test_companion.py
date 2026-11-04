@@ -414,31 +414,7 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn("edit.copy", self.pc.commands())  # the clipboard is never used
 
     def test_keep_and_discard_leave_one_step_or_none(self):
-        from types import SimpleNamespace
-
-        from openfill_photocraft.service import JobState, Service
-
-        def fill():
-            base = self.bridge.history(self.image)
-            self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
-            layers = self.bridge.insert_results(
-                self.image,
-                [png_bytes("red"), png_bytes("blue"), png_bytes("green")],
-                Rect(0, 0, 64, 48),
-                "Fill",
-                0.0,
-                None,
-            )
-            self.bridge.finish(self.image)
-            service = Service.__new__(Service)
-            service.bridge, service.client, service.image, service.layers = self.bridge, self.pc, self.image, layers
-            service.state = JobState()
-            service.app = SimpleNamespace(log=SimpleNamespace(warning=lambda *a: None))
-            service._collapsed = False
-            service._one_step(self.image, base)
-            return service, layers
-
-        service, _layers = fill()
+        service, _layers = self._fill_service(grow=0, feather=0.0)
         service.show_variation(2)
         service.keep("selected")
         self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])  # one Undo takes it back
@@ -446,17 +422,17 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual((top["name"], top["visible"], top.get("mask")), ("Fill", True, True))
         self.assertNotIn("children", top)  # the kept variation alone, no group
         self.assertEqual(len(self.target["layers"]), 2)
-        self.assertEqual(service.layers[0].id, top["id"])
+        self.assertEqual(service.layers, [])
 
         self.pc.run("history.deleteState", state=1)
-        service, _layers = fill()
+        service, _layers = self._fill_service(grow=0, feather=0.0)
         service.show_variation(1)
         service.keep("none")
         self.assertEqual(self.target["history"], ["Open"])  # Discard leaves no step
         self.assertEqual([r["name"] for r in self.target["layers"]], ["Background"])
 
         # something else changed after the result: nothing is taken back, the hidden ones go
-        service, _layers = fill()
+        service, _layers = self._fill_service(grow=0, feather=0.0)
         self.pc.run("layer.setProps", layer=2, name="Renamed")
         service.keep("selected")
         self.assertEqual(self.target["history"][:3], ["Open", "Duplicate Layer", "Layer Properties"])
@@ -486,6 +462,9 @@ class BridgeTests(unittest.TestCase):
         service.state = JobState()
         service.state.variations = [layer.name for layer in layers]
         service.app = SimpleNamespace(log=SimpleNamespace(warning=lambda *a: None))
+        service._operation_lock = threading.Lock()
+        service._thread = None
+        service._choice_kind = "fill"
         service._collapsed = False
         service._one_step(self.image, base)
         return service, layers
@@ -494,7 +473,7 @@ class BridgeTests(unittest.TestCase):
         # Regression: a click to deselect while Keep ran made it fail with
         # "select.modify.feather is not available right now: no selection", and the three
         # variations vanished. Keep works from the job's stored selection, not the live one.
-        service, layers = self._fill_service()
+        service, _layers = self._fill_service()
         service.show_variation(1)
         self.target["selection"] = None  # the user deselected in the document
         self.pc.deselects = 2  # and clicks land while Keep builds the mask
@@ -503,7 +482,7 @@ class BridgeTests(unittest.TestCase):
         top = self.target["layers"][0]
         self.assertEqual((top["name"], top["visible"], top.get("mask")), ("Fill", True, True))
         self.assertNotIn("children", top)
-        self.assertEqual(service.layers, [layers[1]])
+        self.assertEqual(service.layers, [])
         self.assertEqual(service.state.variations, [])
 
     def test_a_keep_that_fails_never_deletes_the_variations(self):
@@ -585,6 +564,9 @@ class BridgeTests(unittest.TestCase):
         service.bridge, service.client, service.image = self.bridge, self.pc, self.image
         service.state = JobState(title="Generative Expand")
         service.app = SimpleNamespace(log=SimpleNamespace(warning=lambda *a: None))
+        service._operation_lock = threading.Lock()
+        service._thread = None
+        service._choice_kind = "expand"
         service._collapsed = False
         base = self.bridge.history(self.image)
         self.bridge.resize_canvas(self.image, 84, 48, 10, 0)  # round 1: crop, then its layer

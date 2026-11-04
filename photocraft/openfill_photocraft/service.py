@@ -51,6 +51,7 @@ class JobState:
     committing: bool = False  # the final PhotoCraft history operation cannot be cancelled halfway
     variations: list[str] = field(default_factory=list)  # names, best first
     shown: int = 0
+    variation_set: int = 0
     notices: list[str] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -69,6 +70,7 @@ class JobState:
                 "previewRect": self.preview_rect,
                 "variations": list(self.variations),
                 "shown": self.shown,
+                "variationSet": self.variation_set,
                 "notices": list(self.notices[-5:]),
                 "committing": self.committing,
             }
@@ -144,12 +146,14 @@ class Service:
         self._warm: threading.Thread | None = None
         self.image: PCImage | None = None
         self.layers: list[PCLayer] = []
+        self._choice_kind = ""
         self.setup_task = ""  # the ComfyUI download this companion queued
         # The document's history before the last job, and as the job and the picker left it:
         # while it is still that, Keep and Discard can take the result back and leave one
         # clean step (Keep) or none (Discard) instead of piling deletes on top.
         self._job_base: list[str] = []
         self._expected_history: list[str] = []
+        self._expected_revision: int | None = None
         self._collapsed = False  # the job's several steps were made into one (an expand)
 
     def _find_comfy(self) -> None:
@@ -339,7 +343,7 @@ class Service:
             }.get(kind, kind)
             self.state.model = ""
             self.state.fraction, self.state.started, self.state.finished = 0.0, time.time(), 0.0
-            self.state.cancel_requested, self.state.variations, self.state.shown = False, [], 0
+            self.state.cancel_requested = False
             self.state.committing = False
             self.state.preview, self.state.preview_seq = b"", self.state.preview_seq + 1
             self.state.preview_rect = None
@@ -380,12 +384,25 @@ class Service:
             image = self.bridge.active_image() if kind != "txt2img" or p.get("target") == "layer" else None
             if kind != "txt2img" and image is None:
                 raise RuntimeError("Open an image in PhotoCraft first.")
-            self._job_base, self._expected_history, self._collapsed = [], [], False
+            previous = getattr(self, "layers", [])
+            if previous and not self.bridge.has_image(self.image):
+                self._clear_choices()
+                previous = []
+            if previous:
+                if kind != "fill" or self._choice_kind != "fill" or image is None:
+                    raise RuntimeError("Keep or discard the current choices before starting a different tool.")
+                if (image.index, image.name) != (self.image.index, self.image.name):
+                    raise RuntimeError("Keep or discard the current choices before generating on another document.")
+                image.excluded_layers = tuple(layer.id for layer in previous if layer.id is not None)
             base: list[str] | None = None
             if image is not None:
                 self.bridge.track(image)
                 base = self.bridge.history(image)
-            self.image = image
+            revision = self.bridge._revision(image) if previous else None
+            if previous and (
+                not self._expected_history or base != self._expected_history or revision != self._expected_revision
+            ):
+                raise RuntimeError("The document changed. Keep or discard the current choices before generating again.")
             seed = int(p.get("seed", -1))
             variations = int(p.get("variations", 1))
             model = str(p.get("model") or "active")
@@ -437,17 +454,35 @@ class Service:
             done_text = self.state.text or "Done"
             if image is not None:
                 self._begin_commit()
+                if previous:
+                    if self.bridge.history(image) != base or self.bridge._revision(image) != revision:
+                        raise RuntimeError(
+                            "The document changed while generating. The earlier choices are still available."
+                        )
+                    for number, layer in enumerate(layers or (), start=len(previous) + 1):
+                        label = re.sub(r" \(\d+\)$", "", layer.name)
+                        layer.name = f"{label} ({number})"
+                        layer.visible = False
                 with self.state.lock:
                     self.state.text = "Adding the result to PhotoCraft..."
                 self.bridge.finish(image)  # the results reach the document here, in one step
+                original_base = self._job_base if previous else []
+                self._job_base, self._expected_history, self._collapsed = [], [], False
+                self._expected_revision = None
                 self._one_step(image, base)
-            self.layers = list(layers or [])
+                if previous and self._expected_history:
+                    self._job_base = original_base
+            self.image = image
+            self.layers = previous + list(layers or [])
+            self._choice_kind = kind if self.layers else ""
             with self.state.lock:
                 self.state.state = "done"
                 self.state.fraction = 1.0
                 self.state.text = self.state.message = done_text
-                self.state.variations = [layer.name for layer in self.layers] if len(self.layers) > 1 else []
-                self.state.shown = 0
+                self.state.variations = [layer.name for layer in self.layers]
+                if not previous:
+                    self.state.variation_set += 1
+                    self.state.shown = 0
         except BaseException as err:  # noqa: BLE001 - reported on the page
             cancelled = isinstance(err, GenerationCancelled) or self.state.cancel_requested
             self.app.log.warning("job %s failed: %s\n%s", kind, err, traceback.format_exc())
@@ -611,16 +646,20 @@ class Service:
         return sorted(stop)
 
     def show_variation(self, index: int) -> None:
-        if not self.image or not (0 <= index < len(self.layers)):
-            raise RuntimeError("No variations to pick from.")
-        self.bridge.show_variation(self.image, self.layers, index)
-        if self._expected_history:
-            try:
-                self._expected_history = self.bridge.history(self.image)
-            except ControlError:
+        with self._operation_lock:
+            if self.busy():
+                raise RuntimeError("Wait for generation to finish before picking a choice.")
+            if not self.image or not (0 <= index < len(self.layers)):
+                raise RuntimeError("No variations to pick from.")
+            unchanged = self._unchanged_since_job()
+            self.bridge.show_variation(self.image, self.layers, index)
+            if unchanged:
+                self._remember_history()
+            else:
                 self._expected_history = []
-        with self.state.lock:
-            self.state.shown = index
+                self._expected_revision = None
+            with self.state.lock:
+                self.state.shown = index
 
     def _one_step(self, image: PCImage, base: list[str] | None) -> None:
         """After a job: when it left several history steps (an expand crops the canvas, then adds
@@ -634,74 +673,86 @@ class Service:
                 self.bridge.collapse(image, len(base), self.state.title or "OpenFill")
                 self._collapsed = True
                 after = self.bridge.history(image)
+            self._expected_revision = self.bridge._revision(image)
             self._job_base, self._expected_history = base, after
         except ControlError as err:
             self.app.log.warning("the job's steps were not made one: %s", err)
 
     def keep(self, which: str) -> None:
         """'selected': delete the hidden variations; 'all': keep them (hidden); 'none': delete all."""
+        with self._operation_lock:
+            if self.busy():
+                raise RuntimeError("Wait for generation to finish before keeping or discarding choices.")
+            self._keep(which)
+
+    def _clear_choices(self) -> None:
+        self.layers, self.image, self._choice_kind = [], None, ""
+        self._job_base, self._expected_history, self._collapsed = [], [], False
+        self._expected_revision = None
+        with self.state.lock:
+            self.state.variations = []
+            self.state.shown = 0
+            self.state.variation_set += 1
+
+    def _keep(self, which: str) -> None:
+        if which not in ("selected", "all", "none"):
+            raise ValueError("Choose Keep, Keep all, or Discard.")
         if not self.image or not self.layers:
             return
+        if which == "all" or not self.bridge.has_image(self.image):
+            self._clear_choices()
+            return
         shown = self.state.shown
-        if which != "all" and self._unchanged_since_job():
+        if self._unchanged_since_job():
             # Everything here works from the job's stored layers (pixels, mask, selection), not
             # from PhotoCraft's live selection, and the job is only forgotten once it worked: a
             # failure leaves the variations in the document and in the picker.
             image, base = self.image, self._job_base
             if which == "none":
                 self.bridge.rewind(image, len(base))  # as if the job had not run: no step
-                self.layers = []
-            elif not self._collapsed:
+            elif not self._collapsed or self._choice_kind == "fill":
                 chosen = self.layers[shown]
                 try:
                     self.bridge.keep_one(image, len(base), self.layers, chosen, re.sub(r" \(\d+\)$", "", chosen.name))
                 except BaseException:
                     self._remember_history()
                     raise
-                self.layers = [chosen]
             else:  # an expand: its canvas stays; the hidden variations go, still one step
                 for i, layer in enumerate(self.layers):
                     if i != shown and layer.id is not None:
                         self.client.run("layer.delete", layer=layer.id)
                 self.bridge.collapse(image, len(base), self.state.title or "OpenFill")
-                self.layers = [self.layers[shown]]
-            self._job_base = []
-            with self.state.lock:
-                self.state.variations = []
-            return
-        group = self.layers[0].group
-        if which == "none" and group is not None and all(layer.group == group for layer in self.layers):
-            doomed_ids = [group]  # the variations' group, in one step
         else:
-            doomed_ids = [
-                layer.id
-                for i, layer in enumerate(self.layers)
-                if layer.id is not None and (which == "none" or (which == "selected" and i != shown))
-            ]
-        for layer_id in doomed_ids:
-            try:
-                self.client.run("layer.delete", layer=layer_id)
-            except ControlError:
-                pass
-        self.layers = [] if which != "all" else self.layers
-        with self.state.lock:
-            self.state.variations = []
+            # Other document history belongs to the user. Remove only existing
+            # result layers by ID, even if they were moved out of their group.
+            live_ids = {layer["id"] for layer in self.bridge._flat_layers(self.image)}
+            if which == "selected" and self.layers[shown].id not in live_ids:
+                raise RuntimeError("The selected variation is no longer in the document.")
+            for i, layer in enumerate(self.layers):
+                if layer.id in live_ids and (which == "none" or i != shown):
+                    self.client.run("layer.delete", layer=layer.id)
+        self._clear_choices()
 
     def _remember_history(self) -> None:
         """After a Keep that failed: the document's history as it is now, so Keep can be tried
         again when the variations are still (or again) the job's last step."""
         try:
             self._expected_history = self.bridge.history(self.image)
+            self._expected_revision = self.bridge._revision(self.image)
         except ControlError:
-            self._job_base = []
+            self._expected_history = []
+            self._expected_revision = None
 
     def _unchanged_since_job(self) -> bool:
         """True when the document's history is still exactly as the last job and the picker
         left it (nothing else was done since), so the job's step can be taken back."""
-        if not self._job_base or self.image is None:
+        if not self._expected_history or self.image is None:
             return False
         try:
-            return self.bridge.history(self.image) == self._expected_history
+            return (
+                self.bridge.history(self.image) == self._expected_history
+                and self.bridge._revision(self.image) == self._expected_revision
+            )
         except ControlError:
             return False
 

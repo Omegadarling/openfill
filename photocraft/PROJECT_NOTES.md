@@ -8,5 +8,6 @@ Read this before editing the companion. This branch starts at OpenFill `photocra
 - Preserve the document exterior with a hard selection in the graph. Apply the saved soft mask once when PhotoCraft inserts the result. A source image passed through an encoder alone does not constrain geometry or guarantee reference adherence.
 - Persist model visibility separately from model installation and selection. The panel's layout preferences store stable section IDs, which can be restored when an older profile is loaded.
 - Keep unsent Generation control edits through polling. Send the changed values with the next job so the service can validate and save them before starting generation. Keep Engine settings on their own Save action.
+- When appending results, exclude the pending layers from the input in a scratch duplicate. Verify the document's history and revision before committing the new choices. Keep existing thumbnail indices and selection stable within the same result set.
 - Keep personal backend definitions, model inventories, test documents, configuration, logs, and weights out of public source and Git history.
 - Run the shared and PhotoCraft companion unit tests. A live editor test should use a disposable PhotoCraft profile, verify exterior pixels and Discard, and leave existing ComfyUI jobs alone. Inspect renders separately for visual quality.

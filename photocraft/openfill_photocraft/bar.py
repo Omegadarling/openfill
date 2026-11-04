@@ -3,7 +3,8 @@
 """The OpenFill panel: a window without a title bar that stays on top of PhotoCraft, like
 Photoshop's contextual task bar. Its header moves the whole panel. Inside, the edit tools,
 references and settings share one scrollable stack of collapsible, reorderable sections.
-Job actions stay at the bottom. The whole panel can fold into a small strip in PhotoCraft.
+Generate and Cancel stay at the bottom. Result actions follow the thumbnails. The whole panel
+can fold into a small strip in PhotoCraft.
 
 Tk runs on the main thread; the job runs in the service's worker thread, and slower
 look-ups (models on disk, ComfyUI) in a refresher thread. The panel only reads their
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
 WIDTH = W
 PREVIEW_MAX = (CW - 24, 230)
 THUMB_H = 72
+THUMB_COLUMNS = 5
 
 TABS = (("fill", "Fill"), ("remove", "Remove"), ("expand", "Expand"), ("txt2img", "Create"))
 CREATE_SIZES = (("Square", 1024, 1024), ("Landscape", 1216, 832), ("Portrait", 832, 1216))
@@ -527,10 +529,25 @@ class Bar:
         self.job_text.pack(fill="x", pady=(8, 0))
         self.preview = tk.Label(j, bg=PANEL, bd=0, highlightthickness=0)
         self.thumbs = ui.frame(j, PANEL)
-        ui.caption(self.thumbs, "Pick a variation", PANEL).pack(anchor="w")
+        ui.caption(self.thumbs, "Generated results", PANEL).pack(anchor="w")
         self.thumb_row = ui.frame(self.thumbs, PANEL)
         self.thumb_row.pack(fill="x", pady=(8, 0))
         self.thumb_cells: list[tk.Canvas] = []
+        result_actions = ui.frame(self.thumbs, PANEL)
+        result_actions.pack(fill="x", pady=(8, 0))
+        width = CW - 24
+        third = (width - 16) // 3
+        self.discard_button = ui.Button(
+            result_actions, "Discard", lambda: self.keep("none"), "secondary", third, 36, PANEL
+        )
+        self.keep_all_button = ui.Button(
+            result_actions, "Keep all", lambda: self.keep("all"), "secondary", third, 36, PANEL
+        )
+        self.keep_button = ui.Button(
+            result_actions, "Keep", lambda: self.keep("selected"), "primary", width - 2 * third - 16, bg=PANEL
+        )
+        for i, button in enumerate((self.discard_button, self.keep_all_button, self.keep_button)):
+            button.pack(side="left", padx=(8 if i else 0, 0))
 
         self.settings_view = SettingsViews(self, self.sections.bodies)
         self.models_view = self.settings_view.models
@@ -541,15 +558,8 @@ class Bar:
         ui.divider(self.footer).pack(fill="x")
         self.actions = ui.frame(self.footer)
         self.actions.pack(fill="x", padx=PAD, pady=(12, PAD))
-        third = (CW - 16) // 3
         self.go = ui.Button(self.actions, "Generate", self.generate, "primary", CW)
         self.cancel_button = ui.Button(self.actions, "Cancel", self.service.cancel, "secondary", CW, 36)
-        self.discard_button = ui.Button(self.actions, "Discard", lambda: self.keep("none"), "secondary", third, 36)
-        self.keep_all_button = ui.Button(self.actions, "Keep all", lambda: self.keep("all"), "secondary", third, 36)
-        self.keep_button = ui.Button(
-            self.actions, "Keep", lambda: self.keep("selected"), "primary", CW - 2 * third - 16
-        )
-        self._footer_key: tuple = ()
 
         self._build_pill()
         root.bind("<Escape>", lambda _e: self.service.cancel() if self.service.busy() else None)
@@ -658,15 +668,12 @@ class Bar:
     def _max_body(self) -> int:
         return max(200, self.root.winfo_screenheight() - HEAD_H - FOOTER_H - 64)
 
-    def _footer_shown(self) -> bool:
-        return bool(self._footer_key)
-
     def _body_height(self) -> int:
         return self.inner.winfo_reqheight()
 
     def _target_height(self) -> int:
         body = min(self._body_height(), self._max_body())
-        return HEAD_H + body + (FOOTER_H if self._footer_shown() else 0)
+        return HEAD_H + body + FOOTER_H
 
     def _resize(self) -> None:
         """Give the window its height in one geometry change, keeping its bottom edge (the
@@ -1015,21 +1022,12 @@ class Bar:
             card.lift_corners()
 
     def _layout_footer(self) -> None:
-        st = self.service.state.snapshot()
-        if st["state"] == "running":
-            buttons = [self.cancel_button]
-        elif st["state"] == "done" and len(st["variations"]) > 1:
-            buttons = [self.discard_button, self.keep_all_button, self.keep_button]
-        else:
-            buttons = [self.go]
-        key = tuple(id(b) for b in buttons)
-        if key == self._footer_key:
+        button = self.cancel_button if self.service.state.snapshot()["state"] == "running" else self.go
+        if button.winfo_manager():
             return
-        self._footer_key = key
         for b in self.actions.pack_slaves():
             b.pack_forget()
-        for i, b in enumerate(buttons):
-            b.pack(side="left", padx=(8 if i else 0, 0))
+        button.pack(side="left")
         self._inner_changed()
 
     def pick_variations(self, n: int) -> None:
@@ -1154,7 +1152,6 @@ class Bar:
             return
         self.settings_view.generation_submitted()
         self._say("")
-        self._thumbs_for = ()
         self._remember(prompt)
         self._save_prefs()
         self._update()
@@ -1175,10 +1172,12 @@ class Bar:
         return "break"
 
     def keep(self, which: str) -> None:
-        threading.Thread(target=self._safe, args=(self.service.keep, which), daemon=True).start()
+        if not self.service.busy():
+            threading.Thread(target=self._safe, args=(self.service.keep, which), daemon=True).start()
 
     def pick_variation(self, index: int) -> None:
-        threading.Thread(target=self._safe, args=(self.service.show_variation, index), daemon=True).start()
+        if not self.service.busy():
+            threading.Thread(target=self._safe, args=(self.service.show_variation, index), daemon=True).start()
 
     def _safe(self, fn, *args) -> None:
         try:
@@ -1401,7 +1400,7 @@ class Bar:
                 kind = "Remove" if (st["title"] or "").startswith(("Remove", "Object")) else None
                 kind = kind or {"fill": "Fill", "expand": "Expand", "txt2img": "Create"}.get(st["kind"], "Working")
                 self._draw_pill(f"{kind}: {int(st['fraction'] * 100)}%", ACCENT, st["fraction"])
-            elif st["state"] == "done" and len(st["variations"]) > 1:
+            elif st["state"] == "done" and st["variations"]:
                 self.expand()  # pick a variation
             else:
                 self._draw_pill(status, STATUS_COLOR.get(status, DIM), None)
@@ -1508,12 +1507,13 @@ class Bar:
         self.setup.lift_corners()
 
     def _update_job(self, st: dict[str, Any]) -> None:
-        shown = st["state"] != "idle"
+        shown = st["state"] != "idle" or bool(st["variations"])
         if self._shown.get("job") != shown:
             self._shown["job"] = shown
             self._layout_main()
         if not shown:
             self._update_preview(st)
+            self._update_variations(st)
             return
         title = st["title"] or st["kind"]
         if self.job_title.cget("text") != title:
@@ -1523,11 +1523,10 @@ class Bar:
             self.job_model.configure(text=model)
         elapsed = int(st["elapsed"])
         clock = f"{elapsed // 60}:{elapsed % 60:02d}"
-        several = len(st["variations"]) > 1
         if st["state"] == "running":
             text, color, font = f"{st['text']} · {clock}", DIM, self.small
         elif st["state"] == "done":
-            text, color, font = f"Done in {clock}." + (" Pick one, then Keep." if several else ""), OK, self.fonts.body
+            text, color, font = f"Done in {clock}.", OK, self.fonts.body
         elif st["state"] == "cancelled":
             text, color, font = st["message"], DIM, self.fonts.body
         else:
@@ -1571,50 +1570,74 @@ class Bar:
             return
         self._images = [frame, *[i for i in self._images if i is not frame][:8]]
         self.preview.configure(image=frame)
-        if not self.preview.winfo_ismapped():
-            self.preview.pack(pady=(12, 0))
+        if not self.preview.winfo_manager():
+            before = {"before": self.thumbs} if self.thumbs.winfo_manager() else {}
+            self.preview.pack(pady=(12, 0), **before)
             self.job.lift_corners()
 
     def _update_variations(self, st: dict[str, Any]) -> None:
-        names = st["variations"]
-        key = (tuple(names), st["shown"])
-        if len(names) < 2 or st["state"] != "done":
+        names = tuple(st["variations"])
+        if not names:
             self.thumbs.pack_forget()
-            self._thumbs_for = ()
+            if self._thumbs_for:
+                self._clear_thumbnails()
             return
-        if key == self._thumbs_for:
-            return
-        self._thumbs_for = key
+
+        disabled = st["state"] == "running" or self.service.busy()
+        for button in (self.discard_button, self.keep_all_button, self.keep_button):
+            button.set(disabled=disabled)
+        columns = min(len(names), THUMB_COLUMNS)
+        key = (st.get("variationSet", 0), names, columns)
+        changed = key != self._thumbs_for
+        if changed:
+            layers = tuple(self.service.layers)
+            if len(layers) != len(names):
+                return  # the job is publishing a new batch; poll the settled list next tick
+            old_set, old_names, old_columns = self._thumbs_for or (None, (), 0)
+            if old_set != key[0] or old_columns != columns or names[: len(old_names)] != old_names:
+                self._clear_thumbnails()
+            self._add_thumbnails(layers, columns)
+            self._thumbs_for = key
+        state_key = (st["shown"], disabled)
+        if changed or state_key != self._shown.get("thumb_state"):
+            for index, cell in enumerate(self.thumb_cells):
+                selected = index == st["shown"]
+                cell.itemconfigure("selected", state="normal" if selected else "hidden")
+                cell.itemconfigure("number", fill=TEXT if selected else DIM)
+                cell.configure(cursor="" if disabled else "hand2")
+            self._shown["thumb_state"] = state_key
+        if not self.thumbs.winfo_manager():
+            self.thumbs.pack(fill="x", pady=(12, 0))
+        if changed:
+            self.job.lift_corners()
+
+    def _clear_thumbnails(self) -> None:
         for child in self.thumb_row.winfo_children():
             child.destroy()
-        n = len(names)
-        inner = CW - 24
-        width = (inner - 8 * (n - 1)) / n
-        photos = []
         self.thumb_cells = []
-        f = self.fonts
-        for index, layer in enumerate(self.service.layers[:n]):
-            x0 = round(index * (width + 8))
-            cw = round((index + 1) * (width + 8) - 8) - x0
-            on = index == st["shown"]
-            cell = tk.Canvas(self.thumb_row, width=cw, height=100, bg=PANEL, bd=0, highlightthickness=0, cursor="hand2")
-            cell.pack(side="left", padx=(8 if index else 0, 0))
-            if on:
-                cell.create_image(0, 0, image=ui.rrect(cw, 80, 4, PANEL, PANEL, ACCENT, 2), anchor="nw")
+        self._thumbs_for = ()
+
+    def _add_thumbnails(self, layers: tuple, columns: int) -> None:
+        width = (CW - 24 - 8 * (columns - 1)) / columns if columns > 1 else 140
+        start = len(self.thumb_cells)
+        for index, layer in enumerate(layers[start:], start=start):
+            row, column = divmod(index, columns)
+            x0 = round(column * (width + 8))
+            cw = round((column + 1) * (width + 8) - 8) - x0
+            cell = tk.Canvas(self.thumb_row, width=cw, height=100, bg=PANEL, bd=0, highlightthickness=0)
+            cell.grid(row=row, column=column, padx=(8 if column else 0, 0), pady=(6 if row else 0, 0))
+            cell.create_rectangle(1, 1, cw - 1, 79, outline=ACCENT, width=2, tags="selected", state="hidden")
             try:
                 im = Image.frombytes("RGBA", (layer.origin.width, layer.origin.height), layer.rgba)
-                thumb = photo(cover(im, cw - 8, THUMB_H, 2))
-                cell.create_image(4, 4, image=thumb, anchor="nw")
-                photos.append(thumb)
+                # The live preview replaces its own image repeatedly during an append.
+                # Each result cell owns its thumbnail so it stays visible through that.
+                cell.thumbnail = photo(cover(im, cw - 8, THUMB_H, 2))
+                cell.create_image(4, 4, image=cell.thumbnail, anchor="nw")
             except Exception:  # noqa: BLE001
                 pass
-            cell.create_text(cw / 2, 92, text=str(index + 1), font=f.small, fill=TEXT if on else DIM, anchor="center")
+            cell.create_text(cw / 2, 92, text=str(index + 1), font=self.small, fill=DIM, tags="number")
             cell.bind("<Button-1>", lambda _e, i=index: self.pick_variation(i))
             self.thumb_cells.append(cell)
-        self._images = photos + self._images[:4]
-        if not self.thumbs.winfo_ismapped():
-            self.thumbs.pack(fill="x", pady=(12, 0))
-            self.job.lift_corners()
 
     def run(self, alive) -> None:
         """Tk's loop until ``alive()`` turns false (PhotoCraft closed)."""

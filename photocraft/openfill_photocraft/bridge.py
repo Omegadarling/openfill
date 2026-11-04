@@ -85,6 +85,7 @@ class PCImage:
     selection: bytes | None = None  # the job's selection, canvas-sized 8-bit
     _snapshot: tuple[int, Image.Image, Image.Image | None] | None = None  # (revision, visible, selection)
     shift: tuple[int, int] = (0, 0)  # where the job's original (0, 0) is now (an expand grows the canvas)
+    excluded_layers: tuple[int, ...] = ()  # existing choices omitted from an appended edit's input
 
     def _inspect(self) -> dict:
         self.bridge.activate(self)
@@ -176,6 +177,13 @@ class PhotoCraftBridge:
         if d.get("index") != session.get("active"):
             self.client.run("document.activate", document=d["index"])
 
+    def has_image(self, image: PCImage) -> bool:
+        try:
+            self._find(image)
+        except BridgeError:
+            return False
+        return True
+
     def _revision(self, image: PCImage) -> int:
         return int(self._find(image).get("revision") or 0)
 
@@ -266,20 +274,34 @@ class PhotoCraftBridge:
         return Rect(x, y, w, h) if w > 0 and h > 0 else None
 
     def _snapshot(self, image: PCImage) -> tuple[Image.Image, Image.Image | None]:
-        """The visible image (RGBA) and the selection (L, or None), both canvas-sized, read
-        through one merged duplicate; the document itself is not changed. Kept until the
-        document changes."""
+        """Read the canvas and selection through a duplicate without changing the source."""
         self.commit(image)
         revision = self._revision(image)
         if image._snapshot and image._snapshot[0] == revision:
             return image._snapshot[1], image._snapshot[2]
         self.activate(image)
         has_selection = bool(self.client.run("document.inspect").get("hasSelection"))
-        self.client.run("image.duplicate", name="OpenFill export", mergedOnly=True)
+        original_layers = self._flat_layers(image) if image.excluded_layers else []
+        self.client.run("image.duplicate", name="OpenFill export", mergedOnly=not image.excluded_layers)
         duplicate = int(self.session().get("active"))
         visible_rel, mask_rel = self._file("visible"), self._file("mask")
         mask_doc = None
         try:
+            if image.excluded_layers:
+                copied_layers = self._layer_rows()
+
+                def structure(rows):
+                    return [(row.get("name"), row.get("depth"), row.get("kind")) for row in rows]
+
+                if structure(original_layers) != structure(copied_layers):
+                    raise BridgeError("Could not match the source layers in the export copy.")
+                copied_ids = {
+                    row["id"]: copied["id"] for row, copied in zip(original_layers, copied_layers, strict=True)
+                }
+                for layer_id in image.excluded_layers:
+                    if layer_id not in copied_ids:
+                        raise BridgeError("A previous variation is missing from the document.")
+                    self.client.run("layer.setProps", layer=copied_ids[layer_id], visible=False)
             self.client.call("app.save", path=visible_rel)
             if has_selection:
                 self.activate(image)
@@ -545,7 +567,9 @@ class PhotoCraftBridge:
                 layer.id, layer.group = int(row["id"]), copied
         else:
             layers[0].id = copied
-        self.client.run("layer.select", layer=layers[0].id)
+        visible = next((layer for layer in layers if layer.visible), None)
+        if visible is not None:
+            self.client.run("layer.select", layer=visible.id)
 
     def _top_layer(self, image: PCImage) -> int | None:
         """The topmost layer outside any group, so a result lands on top of the stack."""
@@ -568,6 +592,9 @@ class PhotoCraftBridge:
 
     def _flat_layers(self, image: PCImage) -> list[dict]:
         self.activate(image)
+        return self._layer_rows()
+
+    def _layer_rows(self) -> list[dict]:
         reply = self.client.run("layer.list", flat=True) or {}
         return list(reply.get("layers") or [] if isinstance(reply, dict) else reply)
 
