@@ -13,6 +13,7 @@ import binascii
 import json
 import math
 import secrets
+import socketserver
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -372,9 +373,16 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+class _LoopbackHTTPServer(ThreadingHTTPServer):
+    def server_bind(self) -> None:
+        # HTTPServer resolves the host name. The local panel only uses its numeric address.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def serve(api: Api, port: int = 0) -> tuple[ThreadingHTTPServer, str]:
     """Start the page on 127.0.0.1 in a background thread; returns (server, url with key)."""
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(api))
+    server = _LoopbackHTTPServer(("127.0.0.1", port), make_handler(api))
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, name="openfill-web", daemon=True).start()
     host, real_port = server.server_address[:2]

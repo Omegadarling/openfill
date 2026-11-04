@@ -64,6 +64,10 @@ class ShippedCatalogTests(unittest.TestCase):
             folders = [n.folder for n in cat.by_id(self.entries, mid).requires_nodes]
             self.assertIn("ComfyUI-GGUF", folders)
 
+    def test_qwen_2511_unet_download_is_pinned(self):
+        entry = cat.by_id(self.entries, "qwen-image-edit-2511-gguf-q4")
+        self.assertRegex(entry.file_by_role("unet").url, r"/resolve/[0-9a-f]{40}/")
+
     def test_search_paths(self):
         paths = cat.catalog_search_paths(REPO / "gimp-openfill")
         self.assertEqual(paths[1], CATALOG)

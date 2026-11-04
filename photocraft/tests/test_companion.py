@@ -1391,7 +1391,7 @@ class ServiceSetupTests(unittest.TestCase):
 
 
 class PageTests(unittest.TestCase):
-    def test_key_is_required(self):
+    def test_loopback_page_requires_key_without_hostname_lookup(self):
         from openfill_photocraft import web
 
         class StubService:
@@ -1400,9 +1400,12 @@ class PageTests(unittest.TestCase):
         api = web.Api.__new__(web.Api)
         api.service, api.key = StubService(), "secret-key"
         api.state = lambda: {"ok": True}
-        server, url = web.serve(api)
+        with mock.patch.object(socket, "getfqdn", side_effect=AssertionError("Loopback bind attempted a lookup")):
+            server, url = web.serve(api)
         try:
             base = url.split("/?key=")[0]
+            self.assertEqual(server.server_name, "127.0.0.1")
+            self.assertEqual(base, f"http://127.0.0.1:{server.server_port}")
             with self.assertRaises(urllib.error.HTTPError) as cm:
                 urllib.request.urlopen(base + "/api/state", timeout=5)
             self.assertEqual(cm.exception.code, 403)
@@ -1411,6 +1414,7 @@ class PageTests(unittest.TestCase):
             self.assertTrue(url.endswith("?key=secret-key"))
         finally:
             server.shutdown()
+            server.server_close()
 
 
 class LaunchTests(unittest.TestCase):

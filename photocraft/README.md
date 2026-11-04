@@ -1,18 +1,28 @@
 # OpenFill for PhotoCraft
 
-Generative Fill, Remove object, Generative Expand and Text to Image for [PhotoCraft](https://github.com/storytold/photocraft), running on your own graphics card through a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Local generation stays on your computer.
+Generative Fill, Image Edit, Remove Object, Generative Expand, and Text to Image for [PhotoCraft](https://github.com/storytold/photocraft), using [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
 
-It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharriman/openfill#install): the same models, model manager, mask handling, seam correction and variations. Only the connection to the editor is different.
+**[Download the latest PhotoCraft installer](https://github.com/Omegadarling/openfill/releases/latest).** Choose the `openfill-photocraft-*.zip` asset and follow the instructions below for your platform.
 
-The portable development branch adds Qwen Image 2.1 and FIBO editing through an existing local ComfyUI. Build its installer ZIP from the repository root with `python tools/make_photocraft_zip.py`. The upstream release downloads below contain the upstream version.
+The standard tools share the engine from [upstream OpenFill](https://github.com/beckettharriman/openfill). This fork adds reference-guided editing with Qwen Image 2.1 and FIBO 2.0, a single rearrangeable settings panel, and the ability to add to a set of pending variations.
 
 ## Edit with an existing ComfyUI
 
-1. Start ComfyUI on `http://127.0.0.1:8188` and install compatible model files in its model folders.
-2. Close OpenFill. In your PhotoCraft profile's `openfill/config.json`, set `"remote_fibo": true` and `"fibo_source": "local"`. Keep any other settings in the file. See [Good to know](#good-to-know) for the profile location.
-3. Reopen PhotoCraft through OpenFill, select the area you want to edit, and choose a model under **Image Edit**. Use Select All for a whole-image edit.
+1. Set up the model files below in a running ComfyUI that answers at `http://127.0.0.1:8188`.
+2. Open **PhotoCraft with OpenFill** once to create the profile, then close it. In the profile’s `openfill/config.json`, set `"remote_fibo": true` and `"fibo_source": "local"`, keeping the other settings. If the file is missing, create the `openfill` folder inside the profile and save this as `config.json`. See [Good to know](#good-to-know) for the profile location.
 
-The dropdown lists compatible models reported by the running server. Existing-server mode uses your ComfyUI process without managing its lifecycle. To return to the standard managed engine, set `"remote_fibo": false` while the companion is closed.
+   ```json
+   {
+     "remote_fibo": true,
+     "fibo_source": "local"
+   }
+   ```
+
+3. Reopen **PhotoCraft with OpenFill**, select the area to edit, and choose a model in **Image Edit**. Use **Select All** for a whole-image edit. If no model appears, use **Engine → Check** and confirm that ComfyUI can see all required files and nodes.
+
+Existing-server mode discovers compatible model files and nodes from ComfyUI. Install those weights on the server yourself. The public build lists **Local ComfyUI** as its only backend source. A manually started SSH tunnel can forward the same loopback port to a remote ComfyUI. If you maintain a custom build with additional named backends, register them in [`gimp-openfill/openfill/sources.py`](https://github.com/Omegadarling/openfill/blob/main/gimp-openfill/openfill/sources.py) and set `fibo_source` to the registered ID. The models in the standard **Manage Models** catalog belong to the managed engine. To return to that engine and its Fill, Remove, Expand, and Create modes, set `"remote_fibo": false` while the companion is closed.
+
+### Qwen Image 2.1
 
 Qwen 2.1 uses `qwen3vl_8b_fp8_scaled.safetensors` in `models/text_encoders` and `qwen_image_2.1_vae_bf16.safetensors` in `models/vae`. Put one or both diffusion checkpoints in `models/diffusion_models`.
 
@@ -21,9 +31,9 @@ Qwen 2.1 uses `qwen3vl_8b_fp8_scaled.safetensors` in `models/text_encoders` and 
 | Qwen Image 2.1 | `qwen_image_2.1_bf16.safetensors` | 25 Euler steps at CFG 1 |
 | Qwen Image 2.1 Lightning v2 RL | `qwen_image_2.1_lightning_v2_rl_bf16.safetensors` | Four Euler steps using the published sigma schedule |
 
-The Qwen Image 2.1 release provides the full BF16 model and VAE. The encoder comes from the Comfy-Org Qwen3-VL release. Use a recent ComfyUI with the native Qwen 2.1 nodes. [Model files](https://huggingface.co/Comfy-Org/Qwen-Image-2.1) · [Encoder files](https://huggingface.co/Comfy-Org/Qwen3-VL) · [ComfyUI guide](https://docs.comfy.org/tutorials/image/qwen/qwen-image-2-1)
+The Qwen Image 2.1 release provides the full BF16 model and VAE. The encoder comes from the Comfy-Org Qwen3-VL release. ComfyUI needs the native `TextEncodeQwenImage21` and `QwenImage21Cache` nodes. [Model files](https://huggingface.co/Comfy-Org/Qwen-Image-2.1) · [Encoder files](https://huggingface.co/Comfy-Org/Qwen3-VL) · [ComfyUI guide](https://docs.comfy.org/tutorials/image/qwen/qwen-image-2-1)
 
-For Lightning v2 RL, download the pinned full FP32 transformer and convert it with the optional tool in this checkout. Run the tool with a Python environment that already has NumPy, such as the ComfyUI virtual environment. [LightX2V model and license](https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning-v2-RL/tree/682b2529ffb5ae9ba39ceb81a31ce99e602da2ee)
+For Lightning v2 RL, download the pinned full FP32 transformer and convert it with the optional conversion script from the source repository. Run the script with a Python environment that has NumPy, such as the ComfyUI virtual environment. [LightX2V model and license](https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning-v2-RL/tree/682b2529ffb5ae9ba39ceb81a31ce99e602da2ee) · [Conversion script](https://github.com/Omegadarling/openfill/blob/main/tools/convert_qwen21_lightning.py)
 
 ```text
 python tools/convert_qwen21_lightning.py diffusion_pytorch_model.safetensors qwen_image_2.1_lightning_v2_rl_bf16.safetensors
@@ -31,34 +41,36 @@ python tools/convert_qwen21_lightning.py diffusion_pytorch_model.safetensors qwe
 
 Both Qwen variants return a masked layer and preserve pixels outside the selection. Leave room in the selection for inserted objects and their shadows. A tight selection can clip the generated object.
 
+### FIBO 2.0
+
+Use a ComfyUI build that exposes `TextEncodeFibo2` and supports the `fibo2` CLIP loader and NVFP4 checkpoints. Put `qwen3vl_4b_bf16.safetensors` in `models/text_encoders` and `flux2-vae.safetensors` in `models/vae`. Put `fibo2_edit_turbo_nvfp4.safetensors`, `fibo2_dev_nvfp4.safetensors`, or both in `models/diffusion_models`. The optional `qwen3_vl_4b_nvfp4_full.safetensors` encoder adds Heretic choices alongside Original in the model dropdown. **Generation** offers Preserve structure, Replace selected content, context, and boundary color matching controls for FIBO. [Encoder and VAE](https://huggingface.co/Comfy-Org/Fibo-2.0) · [Edit Turbo checkpoint](https://huggingface.co/BennyDaBall/Fibo-2.0-edit-turbo-NVFP4) · [Dev checkpoint](https://huggingface.co/BennyDaBall/Fibo-2.0-dev-NVFP4)
+
 ### Reference images and panel layout
 
-Choose a reference-capable model and use **Reference Images** to attach PNG, JPEG, or WebP files. Drop files onto the reference drop area in the Windows panel or browser view, or click **Add reference images** to choose them. The target document is image 1. In a Qwen prompt, use `<image2>`, `<image3>`, and so on for the attachments. FIBO uses `<image_2>`, `<image_3>`, and so on. The reference list shows the current labels and supports reordering and removal. Attachments are kept for the current companion session.
+Choose a reference-capable model and use **Reference Images** to attach up to 15 PNG, JPEG, or WebP files. Drop files onto the reference drop area in the Windows panel or browser view, or click **Add reference images** to choose them. The target document is image 1. In a Qwen prompt, use `<image2>`, `<image3>`, and so on for the attachments. FIBO uses `<image_2>`, `<image_3>`, and so on. The reference list shows the current labels and supports reordering and removal. Attachments are kept for the current companion session.
 
 Open **Manage Models** to control which models appear in the main dropdown. Click a section header to expand or collapse it, or drag its grip to move the section. OpenFill saves the section order, collapsed state, and model visibility in your profile.
 
 Changes in **Generation** apply when you click **Generate** or press Enter in the prompt. OpenFill saves those choices once it accepts the job.
 
-<img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
-
-> **Version 0.2.4** fixes Mac prompt typing and model-menu focus, and lets you reuse ComfyUI's Python with the fallback panel in your default browser. It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. The Mac version passed Fill, Remove, Expand and Create on an M3 MacBook Air; see [the test results](../docs/evidence/macos-photocraft-2026-10-26/).
+<img src="https://raw.githubusercontent.com/Omegadarling/openfill/main/docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 
 ## What you need
 
-- **PhotoCraft 0.12 to 0.16** (the Windows `.msi` or the Linux build from its [releases page](https://github.com/storytold/photocraft/releases)). The newest, 0.16.0, is fine.
+- **PhotoCraft** from its [releases page](https://github.com/storytold/photocraft/releases). The upstream companion documented compatibility with PhotoCraft 0.12 to 0.16.
 - **Windows 10 or 11, Linux, or macOS on Apple Silicon.**
-- **An NVIDIA graphics card, or an AMD Radeon RX 7000 or newer**, 8 GB or more for the SDXL and FLUX models. LaMa (Remove) and the SD 1.5 models are fine on less. AMD support is new and I haven't been able to test it on an AMD card yet ([AMD graphics cards](../docs/install.md#amd-graphics-cards)). Without a card ComfyUI can use, it runs on the processor, which is very slow.
+- **A GPU supported by ComfyUI**. 8 GB is enough for many standard SDXL and FLUX workflows. LaMa (Remove) and SD 1.5 can use less. The Qwen 2.1 and FIBO weights have higher memory and disk requirements. [AMD graphics cards](https://github.com/beckettharriman/openfill/blob/main/docs/install.md#amd-graphics-cards)
 - **ComfyUI.** On Windows the OpenFill panel downloads it for you the first time (a 1.9 GB download, 6.7 GB unpacked; the version for AMD cards is 1.6 GB). If you use OpenFill for GIMP, the same ComfyUI is found by itself.
 - **Python 3.10 or newer with Pillow.** You can use ComfyUI's existing Python on Windows, macOS or Linux without installing another one. Tk is optional: with it, you get a separate OpenFill panel; without it, you get a tab in your default browser.
-- **Disk space** for the models: from 0.2 GB (LaMa) to about 13 GB (FLUX.1 Fill Q6).
+- **Disk space** for the models. LaMa is about 0.2 GB. The largest checkpoints and their encoders can need tens of gigabytes.
 
 ## Install on Windows
 
 1. Install PhotoCraft (the `.msi`).
 2. If you already have ComfyUI, you can use its Python without installing another one; see [using ComfyUI's Python](#use-comfyuis-python). Otherwise, install Python from [python.org](https://www.python.org/downloads/windows/).
-3. Unzip `openfill-photocraft-0.2.4.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
+3. Unzip the [fork installer](https://github.com/Omegadarling/openfill/releases/latest) and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
 4. Open **PhotoCraft with OpenFill**. PhotoCraft opens with the OpenFill panel next to it.
-5. The first time, the panel asks for what's missing:
+5. For the managed engine, the panel asks for what's missing:
    - **AI engine not found**: press **Download ComfyUI**. It downloads and unpacks in the background (a few minutes) into `%LOCALAPPDATA%\OpenFill\ComfyUI`. With an AMD card it gets ComfyUI's version for AMD cards. If you already have ComfyUI, press **Choose folder** instead and pick the folder that has `main.py` in it (or the portable folder).
    - **No models installed**: press **Open model manager**. LaMa (removing things, 0.2 GB) and DreamShaper 8 Inpainting (fill, expand and create, 2 GB) cover every tool.
 
@@ -70,8 +82,6 @@ To remove it, run `Install OpenFill for PhotoCraft.cmd --uninstall` from a comma
 
 
 ## Use ComfyUI's Python
-
-The default-browser fallback and explicit interpreter priority require OpenFill for PhotoCraft 0.2.4 or newer.
 
 You do not need a second Python installation. OpenFill can run in ComfyUI's Python environment on Windows, macOS and Linux. It needs Python 3.10 or newer and Pillow, which ComfyUI normally already has. Selecting this interpreter does not change ComfyUI's packages.
 
@@ -100,10 +110,10 @@ The launcher looks for PhotoCraft each time it starts, rather than storing a ver
 
 ## Install on Linux
 
-1. Unzip `openfill-photocraft-0.2.4.zip` and run `sh install.sh` in the unzipped folder.
+1. Unzip the [fork installer](https://github.com/Omegadarling/openfill/releases/latest) and run `sh install.sh` in the unzipped folder.
    - No PhotoCraft yet? The installer offers to download it for you (the official Linux build, SHA-256 checked, no admin rights).
 2. Open PhotoCraft the usual way: from the app menu, or by opening an image in the file manager. OpenFill comes with it.
-3. The first time, the panel asks for what's missing. ComfyUI: choose its folder, or follow ComfyUI's [manual install](https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux) first (for an AMD card, with PyTorch for ROCm: [AMD on Linux](../docs/install.md#amd-on-linux)). Models: **Open model manager**.
+3. For the managed engine, choose your ComfyUI folder or follow ComfyUI's [manual install](https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux), then use **Open model manager** to install models. [AMD on Linux](https://github.com/beckettharriman/openfill/blob/main/docs/install.md#amd-on-linux)
 
 The installer gives PhotoCraft's menu entry to OpenFill (a copy in `~/.local/share/applications` that starts PhotoCraft through OpenFill). If you'd rather keep them apart, run `sh install.sh --separate-icon` and use "PhotoCraft with OpenFill" instead.
 
@@ -111,13 +121,13 @@ To remove it: `openfill-photocraft-uninstall`. Your settings and models stay.
 
 ## Install on macOS
 
-Tested with PhotoCraft 0.16.0 on a MacBook Air M3, 16 GB, macOS 14.7.
+The upstream installer was tested with PhotoCraft 0.16.0 on an M3 MacBook Air. [Upstream test results](https://github.com/beckettharriman/openfill/tree/main/docs/evidence/macos-photocraft-2026-10-26)
 
 1. Install PhotoCraft from its [macOS DMG](https://github.com/storytold/photocraft/releases) in `/Applications` or `~/Applications`.
 2. Install Python 3.10 or newer from [python.org](https://www.python.org/downloads/macos/), which includes Tk, then run `python3 -m pip install Pillow`. You can instead use your existing ComfyUI Python with Pillow; Tk is optional. See [using ComfyUI's Python](#use-comfyuis-python).
 3. Set up ComfyUI using the [Mac engine steps](https://github.com/beckettharriman/openfill/blob/main/docs/install.md#macos), or use your existing ComfyUI and models.
-4. Download [openfill-photocraft-0.2.4.zip](https://github.com/beckettharriman/openfill/releases/download/photocraft-v0.2.4/openfill-photocraft-0.2.4.zip), unzip it, and run `sh install.sh` from the unzipped `openfill-photocraft-0.2.4` folder.
-5. Open `~/Applications/PhotoCraft with OpenFill.app`. In the gear menu, Engine lets you choose your ComfyUI folder; Models lists LaMa and DreamShaper 8.
+4. Unzip the [fork installer](https://github.com/Omegadarling/openfill/releases/latest) and run `sh install.sh` from the unzipped folder.
+5. Open `~/Applications/PhotoCraft with OpenFill.app`. For the managed engine, use **Engine** to choose your ComfyUI folder and **Manage Models** to install models such as LaMa and DreamShaper 8.
 
 The panel floats independently; following PhotoCraft when it moves or minimizes is Windows-only. To remove OpenFill, open `~/Applications/Uninstall OpenFill for PhotoCraft.app`, or run `sh install.sh --uninstall`. PhotoCraft, settings and models stay.
 
@@ -127,6 +137,7 @@ Select an area in PhotoCraft (Marquee, Lasso, Object Selection), then type what 
 
 | Mode | What it does |
 |---|---|
+| Image Edit | Edits the selected region using a compatible Qwen 2.1 or FIBO 2.0 model on an existing ComfyUI. Add reference images when the prompt needs them. |
 | Fill | Fills the selection from your prompt, or from the surroundings with no prompt. Up to 5 variations. |
 | Remove | Erases what you selected and continues the background. LaMa does it at the image's own resolution. The Model menu offers every installed model that can remove. |
 | Expand | Grows the canvas: drag the frame's edges, or pick a ratio (Original adds 25 % on each side; 1:1, 5:4, 4:3, 3:2 and 16:9, landscape or portrait). It paints the new edges. |
@@ -138,9 +149,9 @@ Every result is a new layer with a mask (variations go into a group), and it is 
 
 The panel stays with PhotoCraft and hides when PhotoCraft is minimized. The arrow at its top right folds it into a small strip. Expand **Manage Models** to manage model files, **Engine** for ComfyUI settings, or **Generation** for generation settings.
 
-ComfyUI starts in the background when PhotoCraft opens, so the first Generate doesn't wait for it, and it stops when PhotoCraft closes.
+In managed mode, OpenFill starts ComfyUI in the background and stops it when PhotoCraft closes. In existing-server mode, you control the ComfyUI process.
 
-## Models
+## Managed engine models
 
 The model manager shows what fits your graphics card. Each model has its own license; the model manager links to it. On an AMD card it marks the GGUF models (FLUX.1 Fill GGUF, Qwen Image Edit), which have been reported to give only noise on some Radeon cards.
 
@@ -166,7 +177,7 @@ Your own SD 1.5 inpainting, SDXL and FLUX.1 Fill files in ComfyUI's model folder
 - **FLUX on 8 GB is slow.** A FLUX.1 Fill fill took about 3 minutes on the RTX 4070 Laptop GPU, and the FLUX removal LoRA about 4. RealVisXL took 25 to 45 seconds, LaMa about 5.
 - **Linux on Wayland:** PhotoCraft answers OpenFill only while its window is drawing. If it's minimized or fully covered when a result is ready, the panel says so and OpenFill waits until you bring it back. On Windows a minimized PhotoCraft keeps working.
 - **The Filter > Plug-ins entry** needs a pixel layer to be active (PhotoCraft greys out filters on groups and text). The panel works with any layer.
-- **Where things are kept:** `%APPDATA%\OpenFill for PhotoCraft` on Windows, `~/.config/openfill-photocraft` on Linux (settings, logs, and the `exchange` folder PhotoCraft writes its temporary files to). Models stay in your ComfyUI folder, shared with OpenFill for GIMP.
+- **Where things are kept** — the OpenFill profile is `%APPDATA%\OpenFill for PhotoCraft` on Windows, `~/.config/openfill-photocraft` on Linux (or under `$XDG_CONFIG_HOME`), and `~/Library/Application Support/OpenFill for PhotoCraft` on macOS. The settings file is `openfill/config.json` inside the profile. Models stay in the ComfyUI model folders.
 
 ## Known limits
 

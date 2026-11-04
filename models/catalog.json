@@ -185,7 +185,7 @@
       ],
       "requires_models": [],
       "files": [
-        {"role": "unet", "url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/main/qwen-image-edit-2511-Q4_K_M.gguf", "dest": "unet/qwen-image-edit-2511-Q4_K_M.gguf", "size": 13244758624, "sha256": "8677bac90627adbbc11efab87b1870e701c4eb3689ee865a3de8ab81b705a723"},
+        {"role": "unet", "url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q4_K_M.gguf", "dest": "unet/qwen-image-edit-2511-Q4_K_M.gguf", "size": 13244758624, "sha256": "8677bac90627adbbc11efab87b1870e701c4eb3689ee865a3de8ab81b705a723"},
         {"role": "clip1", "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "dest": "text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "size": 9384670680, "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4", "license": "Apache-2.0"},
         {"role": "vae", "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors", "dest": "vae/qwen_image_vae.safetensors", "size": 253806246, "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f", "license": "Apache-2.0"}
       ]
