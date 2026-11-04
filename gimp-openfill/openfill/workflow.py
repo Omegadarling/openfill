@@ -20,7 +20,7 @@ import zlib
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
-from .backend import InpaintRequest, ModelSpec, QWEN21_EDIT_TEMPLATE, Txt2ImgRequest, validate_edit_references
+from .backend import QWEN21_EDIT_TEMPLATE, InpaintRequest, ModelSpec, Txt2ImgRequest, validate_edit_references
 
 OUTPUT_NODE = "save"
 
@@ -848,9 +848,16 @@ def build_qwen21_edit(
     g.add("load_mask", "LoadImage", image=mask_ref)
     g.add("selection_mask", "ImageToMask", image=g.out("load_mask"), channel="red")
     g.add("selection_support", "ThresholdMask", mask=g.out("selection_mask"), value=0.0)
-    g.add("encode", "TextEncodeQwenImage21", clip=g.out("clip"), vae=g.out("vae"),
-          prompt=req.prompt, negative_prompt="", resolution=QWEN21_RESOLUTION,
-          **_edit_image_slots(g, g.out("load_image"), reference_refs))
+    g.add(
+        "encode",
+        "TextEncodeQwenImage21",
+        clip=g.out("clip"),
+        vae=g.out("vae"),
+        prompt=req.prompt,
+        negative_prompt="",
+        resolution=QWEN21_RESOLUTION,
+        **_edit_image_slots(g, g.out("load_image"), reference_refs),
+    )
     g.add("cache", "QwenImage21Cache", model=g.out("unet"), device="auto", dtype="default")
     latent = g.out("encode", 2)
     batch = max(1, int(req.sampling.batch))
@@ -864,12 +871,30 @@ def build_qwen21_edit(
         g.add("sigmas", "ManualSigmas", sigmas=QWEN21_LIGHTNING_SIGMAS)
         g.add("sampler_select", "KSamplerSelect", sampler_name="euler")
         g.add("noise", "RandomNoise", noise_seed=int(seed))
-        g.add("sampler", "SamplerCustomAdvanced", noise=g.out("noise"), guider=g.out("guider"),
-              sampler=g.out("sampler_select"), sigmas=g.out("sigmas"), latent_image=latent)
+        g.add(
+            "sampler",
+            "SamplerCustomAdvanced",
+            noise=g.out("noise"),
+            guider=g.out("guider"),
+            sampler=g.out("sampler_select"),
+            sigmas=g.out("sigmas"),
+            latent_image=latent,
+        )
     else:
-        g.add("sampler", "KSampler", model=g.out("cache"), positive=g.out("encode", 0), negative=g.out("encode", 1),
-              latent_image=latent, seed=int(seed), steps=int(req.sampling.steps), cfg=1.0,
-              sampler_name="euler", scheduler="simple", denoise=1.0)
+        g.add(
+            "sampler",
+            "KSampler",
+            model=g.out("cache"),
+            positive=g.out("encode", 0),
+            negative=g.out("encode", 1),
+            latent_image=latent,
+            seed=int(seed),
+            steps=int(req.sampling.steps),
+            cfg=1.0,
+            sampler_name="euler",
+            scheduler="simple",
+            denoise=1.0,
+        )
     g.add("decode", "VAEDecode", samples=g.out("sampler"), vae=g.out("vae"))
     _finish(g, aligned, g.out("decode"), g.out("selection_support"), caps, filename_prefix)
     generated = g.nodes[OUTPUT_NODE]["inputs"]["images"]
@@ -879,8 +904,16 @@ def build_qwen21_edit(
         destination = g.out("source_batch")
     # The graph protects the exterior with hard support. PhotoCraft applies
     # its captured soft selection once when it adds the result layer.
-    g.add("selection_composite", "ImageCompositeMasked", destination=destination, source=generated,
-          x=0, y=0, resize_source=False, mask=g.out("selection_support"))
+    g.add(
+        "selection_composite",
+        "ImageCompositeMasked",
+        destination=destination,
+        source=generated,
+        x=0,
+        y=0,
+        resize_source=False,
+        mask=g.out("selection_support"),
+    )
     g.nodes[OUTPUT_NODE]["inputs"]["images"] = g.out("selection_composite")
     return g.to_dict()
 
@@ -933,8 +966,15 @@ def build_sdxl_edit(
         image = _scale_image(g, "image_scale", image, width, height)
         # Scale the hard support without inventing a second feathered edge.
         g.add("work_mask_image", "MaskToImage", mask=mask)
-        g.add("work_mask_scale", "ImageScale", image=g.out("work_mask_image"),
-              upscale_method="nearest-exact", width=width, height=height, crop="disabled")
+        g.add(
+            "work_mask_scale",
+            "ImageScale",
+            image=g.out("work_mask_image"),
+            upscale_method="nearest-exact",
+            width=width,
+            height=height,
+            crop="disabled",
+        )
         g.add("work_mask", "ImageToMask", image=g.out("work_mask_scale"), channel="red")
         mask = g.out("work_mask")
     if int(req.grow) > 0:
@@ -943,8 +983,16 @@ def build_sdxl_edit(
         g.add("model_mask_grow", "GrowMask", mask=mask, expand=int(req.grow), tapered_corners=True)
         mask = g.out("model_mask_grow")
     if req.model.effective_template == "sdxl_inpaint_edit":
-        g.add("encode", "InpaintModelConditioning", positive=positive, negative=negative,
-              vae=vae, pixels=image, mask=mask, noise_mask=True)
+        g.add(
+            "encode",
+            "InpaintModelConditioning",
+            positive=positive,
+            negative=negative,
+            vae=vae,
+            pixels=image,
+            mask=mask,
+            noise_mask=True,
+        )
         positive, negative, latent = g.out("encode", 0), g.out("encode", 1), g.out("encode", 2)
     else:
         g.add("encode", "VAEEncode", pixels=image, vae=vae)
@@ -954,10 +1002,20 @@ def build_sdxl_edit(
     if batch > 1:
         g.add("batch", "RepeatLatentBatch", samples=latent, amount=batch)
         latent = g.out("batch")
-    g.add("sampler", "KSampler", model=model, positive=positive, negative=negative,
-          latent_image=latent, seed=int(seed), steps=int(req.sampling.steps), cfg=float(req.sampling.cfg),
-          sampler_name=req.sampling.sampler, scheduler=req.sampling.scheduler,
-          denoise=float(req.sampling.denoise))
+    g.add(
+        "sampler",
+        "KSampler",
+        model=model,
+        positive=positive,
+        negative=negative,
+        latent_image=latent,
+        seed=int(seed),
+        steps=int(req.sampling.steps),
+        cfg=float(req.sampling.cfg),
+        sampler_name=req.sampling.sampler,
+        scheduler=req.sampling.scheduler,
+        denoise=float(req.sampling.denoise),
+    )
     g.add("decode", "VAEDecode", samples=g.out("sampler"), vae=vae)
     _finish(g, aligned, g.out("decode"), g.out("selection_support"), caps, filename_prefix)
     generated = g.nodes[OUTPUT_NODE]["inputs"]["images"]
@@ -965,8 +1023,16 @@ def build_sdxl_edit(
     if batch > 1:
         g.add("source_batch", "RepeatImageBatch", image=destination, amount=batch)
         destination = g.out("source_batch")
-    g.add("selection_composite", "ImageCompositeMasked", destination=destination, source=generated,
-          x=0, y=0, resize_source=False, mask=g.out("selection_support"))
+    g.add(
+        "selection_composite",
+        "ImageCompositeMasked",
+        destination=destination,
+        source=generated,
+        x=0,
+        y=0,
+        resize_source=False,
+        mask=g.out("selection_support"),
+    )
     g.nodes[OUTPUT_NODE]["inputs"]["images"] = g.out("selection_composite")
     return g.to_dict()
 
@@ -1008,8 +1074,7 @@ def fibo_edit_prompt(prompt: str, mode: str) -> str:
     """Add mode-specific guidance while retaining the user's complete edit."""
     if mode == "preserve":
         return (
-            prompt.strip()
-            + " Keep the existing structure, surfaces, frames, camera angle and perspective unchanged "
+            prompt.strip() + " Keep the existing structure, surfaces, frames, camera angle and perspective unchanged "
             "except for the requested edit. Use existing openings in their original positions. "
             "Size any added subject to fit the relevant opening and surrounding scene."
         )
@@ -1079,15 +1144,30 @@ def build_fibo2_edit(
     guide_mask = g.out("selection_support")
     if aligned.needs_scaling:
         g.add("guide_mask_image", "MaskToImage", mask=guide_mask)
-        g.add("guide_mask_scale", "ImageScale", image=g.out("guide_mask_image"),
-              upscale_method="nearest-exact", width=width, height=height, crop="disabled")
+        g.add(
+            "guide_mask_scale",
+            "ImageScale",
+            image=g.out("guide_mask_image"),
+            upscale_method="nearest-exact",
+            width=width,
+            height=height,
+            crop="disabled",
+        )
         g.add("guide_mask", "ImageToMask", image=g.out("guide_mask_scale"), channel="red")
         guide_mask = g.out("guide_mask")
     reference = image
     if req.fibo_edit_mode == "replace":
         g.add("guide_gray", "EmptyImage", width=width, height=height, batch_size=1, color=0x808080)
-        g.add("selection_guide", "ImageCompositeMasked", destination=image, source=g.out("guide_gray"),
-              x=0, y=0, resize_source=False, mask=guide_mask)
+        g.add(
+            "selection_guide",
+            "ImageCompositeMasked",
+            destination=image,
+            source=g.out("guide_gray"),
+            x=0,
+            y=0,
+            resize_source=False,
+            mask=guide_mask,
+        )
         reference = g.out("selection_guide")
     g.add(
         "encode",

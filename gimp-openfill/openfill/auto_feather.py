@@ -6,10 +6,11 @@ unselected pixels, including holes. Ring quantization means coverage is accurate
 to one distance bin rather than an exact fractional-pixel area. A cosine ramp
 softens that band without growing the selection or multiplying alpha twice.
 """
+
 from __future__ import annotations
 
-from array import array
 import math
+from array import array
 
 
 def feather_selection(
@@ -122,8 +123,7 @@ def feather_selection(
     # Include the entire quantile ring. A one-pixel extension keeps even a
     # one-pixel/one-alpha selection nonempty at 100%, with ordinary rounding.
     radius = cutoff + 3.0
-    factors = {value: 0.5 - 0.5 * math.cos(math.pi * value / radius)
-               for value in histogram if value <= cutoff}
+    factors = {value: 0.5 - 0.5 * math.cos(math.pi * value / radius) for value in histogram if value <= cutoff}
     output = bytearray(mask)
     for y in range(height):
         start = (y + 1) * stride + 1

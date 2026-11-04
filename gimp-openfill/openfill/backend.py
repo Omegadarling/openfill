@@ -34,7 +34,9 @@ def validate_edit_references(template: str, count: int) -> None:
         return
     maximum, _ = edit_reference_options(template)
     if not maximum:
-        raise ValueError("This model does not support reference images. Choose a reference-capable model or remove the attachments.")
+        raise ValueError(
+            "This model does not support reference images. Choose a reference-capable model or remove the attachments."
+        )
     if count > maximum:
         raise ValueError(f"This model accepts up to {maximum} reference images in addition to the target.")
 

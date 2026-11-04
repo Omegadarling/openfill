@@ -1,4 +1,5 @@
 """Known FIBO backends. Selecting one never starts or stops ComfyUI."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -13,9 +14,7 @@ class Source:
     remote_port: int | None = None
 
 
-SOURCES = (
-    Source("local", "Local ComfyUI", "http://127.0.0.1:8188"),
-)
+SOURCES = (Source("local", "Local ComfyUI", "http://127.0.0.1:8188"),)
 
 
 def get_source(source_id: str) -> Source:

@@ -201,8 +201,13 @@ class Refresher:
         with self.lock:
             app = self.service.app
             if app.settings.remote_fibo and self.facts.get("source") != app.settings.fibo_source:
-                return {"comfy_ok": True, "source": app.settings.fibo_source, "models": {}, "rows": [],
-                        "hardware": f"{app.source_label()} · ComfyUI"}
+                return {
+                    "comfy_ok": True,
+                    "source": app.settings.fibo_source,
+                    "models": {},
+                    "rows": [],
+                    "hardware": f"{app.source_label()} · ComfyUI",
+                }
             return dict(self.facts)
 
     def _loop(self) -> None:
@@ -344,8 +349,9 @@ def rounded(im: Image.Image, radius: int, bg: str) -> Image.Image:
 class Bar:
     """The window. ``show(action)`` is what the Filter > Plug-ins entry calls."""
 
-    def __init__(self, service: Service, watcher: Watcher, page_url: str, profile: Path, *,
-                 api: Api | None = None) -> None:
+    def __init__(
+        self, service: Service, watcher: Watcher, page_url: str, profile: Path, *, api: Api | None = None
+    ) -> None:
         from .web import Api
 
         self.service, self.watcher, self.page_url, self.profile = service, watcher, page_url, profile
@@ -432,7 +438,9 @@ class Bar:
         self._bottom: int | None = None  # the bottom edge the panel keeps (where it opened from the strip)
         self._resize_soon = False
         self.sections = SectionStack(
-            self.inner, self.scroller, self.service.app.settings.panel_layout,
+            self.inner,
+            self.scroller,
+            self.service.app.settings.panel_layout,
             lambda layout: self.api.post("/api/layout", layout),
             lambda message: ui.message(self.root, message),
         )
@@ -963,7 +971,8 @@ class Bar:
         if key in PLACEHOLDERS:
             self.prompt.set_placeholder(
                 "Qwen and FIBO: describe the change. SDXL: describe what should appear in the selection. Select All to edit the whole image."
-                if self.service.app.settings.remote_fibo else PLACEHOLDERS[key]
+                if self.service.app.settings.remote_fibo
+                else PLACEHOLDERS[key]
             )
         self.go.set(label=GO[key])
         self._layout_main()
@@ -975,7 +984,9 @@ class Bar:
     def _layout_main(self) -> None:
         """Pack the tool view's parts for the current mode (12 px apart)."""
         key = self.tab.get()
-        parts: list[tk.Misc] = [self.context_row] if self.service.app.settings.remote_fibo else [self.modes, self.context_row]
+        parts: list[tk.Misc] = (
+            [self.context_row] if self.service.app.settings.remote_fibo else [self.modes, self.context_row]
+        )
         if key == "remove":
             parts.append(self.remove_line)
         if key == "expand":
@@ -1099,7 +1110,11 @@ class Bar:
                 )
                 if self.service.app.settings.remote_fibo:
                     body.pop("strength")  # Let the selected edit model choose its tested default.
-                if kind == "fill" and self._reference_options(self.refresher.get())[0] and self.service.reference_rows():
+                if (
+                    kind == "fill"
+                    and self._reference_options(self.refresher.get())[0]
+                    and self.service.reference_rows()
+                ):
                     body["useReferences"] = True
                 if kind == "remove":
                     removal = self._model_ids.get(self.model_choice.get(), "default")
@@ -1232,8 +1247,10 @@ class Bar:
         tab = self.tab.get()
         all_models = facts.get("models") or {}
         hidden = set(self.service.app.settings.hidden_models)
-        models = {kind: [(model_id, name) for model_id, name in options if model_id not in hidden]
-                  for kind, options in all_models.items()}
+        models = {
+            kind: [(model_id, name) for model_id, name in options if model_id not in hidden]
+            for kind, options in all_models.items()
+        }
         shown_facts = {**facts, "models": models}
         if tab == "remove":
             has_any = bool(models.get("remove") or models.get("fill"))
@@ -1254,8 +1271,10 @@ class Bar:
         if not facts:
             shown = "Checking..."
         elif not names:
-            has_options = bool(all_models.get(tab) or (tab in ("fill", "remove")
-                                                      and (all_models.get("remove") or all_models.get("fill"))))
+            has_options = bool(
+                all_models.get(tab)
+                or (tab in ("fill", "remove") and (all_models.get("remove") or all_models.get("fill")))
+            )
             shown = "No models shown" if has_options else NO_MODELS
         else:
             shown = current
@@ -1367,8 +1386,9 @@ class Bar:
             self.settings_view.update_view(facts)
 
         st = self.service.state.snapshot()
-        self.cancel_button.set(disabled=bool(st.get("committing")),
-                               label="Adding result..." if st.get("committing") else "Cancel")
+        self.cancel_button.set(
+            disabled=bool(st.get("committing")), label="Adding result..." if st.get("committing") else "Cancel"
+        )
         if self.collapsed:
             if st["state"] == "running":
                 kind = "Remove" if (st["title"] or "").startswith(("Remove", "Object")) else None

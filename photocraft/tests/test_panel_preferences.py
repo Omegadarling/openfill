@@ -12,9 +12,10 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")]
 
-from openfill.config import PANEL_SECTIONS, Settings  # noqa: E402
 from openfill_photocraft.references import ReferenceImages  # noqa: E402
 from openfill_photocraft.web import Api  # noqa: E402
+
+from openfill.config import PANEL_SECTIONS, Settings  # noqa: E402
 
 
 def png(color):
@@ -36,9 +37,13 @@ class PanelPreferenceTests(unittest.TestCase):
         self.api.post("/api/layout", {"order": ["models", "edit", "models", "stale", 9], "collapsed": ["edit"]})
         self.api.post("/api/models/visibility", {"id": "qwen", "visible": False})
         saved = Settings.load(self.path)
-        self.assertEqual(saved.panel_layout, {
-            "order": ["models", "edit", "references", "engine", "generation"], "collapsed": ["edit"],
-        })
+        self.assertEqual(
+            saved.panel_layout,
+            {
+                "order": ["models", "edit", "references", "engine", "generation"],
+                "collapsed": ["edit"],
+            },
+        )
         self.assertEqual(set(saved.panel_layout["order"]), set(PANEL_SECTIONS))
         self.assertEqual(saved.hidden_models, ["qwen"])
         self.assertEqual(saved.active_model, "qwen")

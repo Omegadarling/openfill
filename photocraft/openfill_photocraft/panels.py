@@ -15,8 +15,8 @@ removals, checks and saves run in a worker thread and report back through ``Bar.
 
 from __future__ import annotations
 
-import threading
 import math
+import threading
 import tkinter as tk
 from typing import TYPE_CHECKING, Any
 
@@ -46,8 +46,11 @@ SETTINGS = (
     ("extra_server_args", "Extra ComfyUI options", str),
 )
 SECTIONS = {
-    "edit": "Image Edit", "references": "Reference Images", "models": "Manage Models",
-    "engine": "Engine", "generation": "Generation Settings",
+    "edit": "Image Edit",
+    "references": "Reference Images",
+    "models": "Manage Models",
+    "engine": "Engine",
+    "generation": "Generation Settings",
 }
 BUSY = ("Downloading", "Waiting", "Installing", "Removing", "Working")
 
@@ -79,9 +82,18 @@ class SectionStack(tk.Frame):
             header = self.headers[key] = ui.frame(section, PANEL, height=32)
             header.pack(fill="x")
             header.pack_propagate(False)
-            grip = self.grips[key] = tk.Label(header, text="⠿", fg=DIM, bg=PANEL, width=4,
-                                             cursor="fleur", takefocus=True, highlightthickness=1,
-                                             highlightbackground=PANEL, highlightcolor=ACCENT)
+            grip = self.grips[key] = tk.Label(
+                header,
+                text="⠿",
+                fg=DIM,
+                bg=PANEL,
+                width=4,
+                cursor="fleur",
+                takefocus=True,
+                highlightthickness=1,
+                highlightbackground=PANEL,
+                highlightcolor=ACCENT,
+            )
             grip.pack(side="right", fill="y")
             grip.bind("<ButtonPress-1>", lambda event, name=key: self._start_drag(name, event))
             grip.bind("<B1-Motion>", self._drag)
@@ -90,10 +102,20 @@ class SectionStack(tk.Frame):
             grip.bind("<Up>", lambda _event, name=key: self._move_one(name, -1))
             grip.bind("<Down>", lambda _event, name=key: self._move_one(name, 1))
             toggle = self.toggles[key] = tk.Button(
-                header, command=lambda name=key: self.toggle(name), anchor="w", padx=8, bd=0,
-                bg=PANEL, fg=TEXT, activebackground=LINE, activeforeground=TEXT,
-                font=ui.fonts(self).bold, cursor="hand2", highlightthickness=1,
-                highlightbackground=PANEL, highlightcolor=ACCENT,
+                header,
+                command=lambda name=key: self.toggle(name),
+                anchor="w",
+                padx=8,
+                bd=0,
+                bg=PANEL,
+                fg=TEXT,
+                activebackground=LINE,
+                activeforeground=TEXT,
+                font=ui.fonts(self).bold,
+                cursor="hand2",
+                highlightthickness=1,
+                highlightbackground=PANEL,
+                highlightcolor=ACCENT,
             )
             toggle.pack(side="left", fill="both", expand=True)
             self.bodies[key] = ui.frame(section)
@@ -139,8 +161,7 @@ class SectionStack(tk.Frame):
 
     def _destination(self, y: int) -> tuple[list[str], int]:
         others = [key for key in self.order if key != self.dragged]
-        index = sum(y >= self.headers[key].winfo_rooty() + self.headers[key].winfo_height() / 2
-                    for key in others)
+        index = sum(y >= self.headers[key].winfo_rooty() + self.headers[key].winfo_height() / 2 for key in others)
         return others, index
 
     def _show_drop(self) -> None:
@@ -219,9 +240,11 @@ class SettingsViews:
             view.pack(fill="x")
         if not bar.service.app.settings.remote_fibo:
             ui.Button(bodies["engine"], "Save engine settings", lambda: self.save("engine"), "accent").pack(
-                anchor="w", pady=(10, 0))
-        self.generation_save = ui.Button(bodies["generation"], "Save generation settings",
-                                         lambda: self.save("generation"), "accent")
+                anchor="w", pady=(10, 0)
+            )
+        self.generation_save = ui.Button(
+            bodies["generation"], "Save generation settings", lambda: self.save("generation"), "accent"
+        )
         self.generation_save.pack(anchor="w", pady=(10, 0))
         self.load()
 
@@ -245,8 +268,11 @@ class SettingsViews:
 
     def values(self, section: str) -> dict[str, Any]:
         if section == "engine":
-            raw = {"autostart": self.engine.autostart.get(), "idle_timeout_minutes": self.engine.idle.get(),
-                   "extra_server_args": self.engine.extra.get()}
+            raw = {
+                "autostart": self.engine.autostart.get(),
+                "idle_timeout_minutes": self.engine.idle.get(),
+                "extra_server_args": self.engine.extra.get(),
+            }
         else:
             raw = {key: entry.get() for key, entry in self.generation.fields.items()}
             raw.update(self.generation.auto_feather_values())
@@ -319,9 +345,11 @@ class ReferenceView(tk.Frame):
         count = len(self.rows)
         self.add.set(disabled=busy or self.adding or count >= limit)
         if limit and syntax:
-            help_text = (f"The PhotoCraft image is {syntax.replace('N', '1')}. "
-                         f"Name the added images in your prompt using the labels below. "
-                         f"Up to {limit} extra images for this model.")
+            help_text = (
+                f"The PhotoCraft image is {syntax.replace('N', '1')}. "
+                f"Name the added images in your prompt using the labels below. "
+                f"Up to {limit} extra images for this model."
+            )
             if count > limit:
                 help_text += " Remove extra images before running the edit."
         elif count:
@@ -330,8 +358,11 @@ class ReferenceView(tk.Frame):
             help_text = "Choose a Qwen or FIBO edit model to attach extra images."
         if self.help.cget("text") != help_text:
             self.help.configure(text=help_text)
-        key = (tuple(tuple(row.get(field) for field in ("id", "name", "width", "height")) for row in self.rows),
-               syntax, busy)
+        key = (
+            tuple(tuple(row.get(field) for field in ("id", "name", "width", "height")) for row in self.rows),
+            syntax,
+            busy,
+        )
         if key == self._shown:
             return
         for child in self.list.winfo_children():
@@ -351,16 +382,17 @@ class ReferenceView(tk.Frame):
                 button.set(disabled=busy or disabled)
             token = syntax.replace("N", str(index + 2)) if syntax else f"Reference {index + 1}"
             ui.small(box, f"{token}  {row['name']}\n{row['width']} × {row['height']}", wrap=CW - 155).pack(
-                side="left", fill="x", expand=True)
+                side="left", fill="x", expand=True
+            )
         self._shown = key
 
     def _choose(self) -> None:
         from tkinter import filedialog
 
         paths = filedialog.askopenfilenames(
-            parent=self.bar.root, title="Add reference images",
-            filetypes=(("Images", ("*.png", "*.jpg", "*.jpeg", "*.webp")),
-                       ("All files", "*.*")),
+            parent=self.bar.root,
+            title="Add reference images",
+            filetypes=(("Images", ("*.png", "*.jpg", "*.jpeg", "*.webp")), ("All files", "*.*")),
         )
         if not paths:
             return
@@ -449,8 +481,9 @@ class ModelsView(tk.Frame):
         if self.hardware.cget("text") != line:
             self.hardware.configure(text=line)
         hidden = set(self.bar.service.app.settings.hidden_models)
-        rows = [r | {"visible": r["id"] not in hidden} for r in facts.get("rows") or []
-                if r["runnable"] or r["installed"]]
+        rows = [
+            r | {"visible": r["id"] not in hidden} for r in facts.get("rows") or [] if r["runnable"] or r["installed"]
+        ]
         installed = [r for r in rows if r["installed"]]
         installed.sort(key=lambda r: (not r["runnable"], not r["active"], r["name"].lower()))
         available = sorted((r for r in rows if not r["installed"]), key=lambda r: r["name"].lower())
@@ -694,6 +727,7 @@ class EngineView(tk.Frame):
             for child in self.winfo_children():
                 child.pack_forget()
             from openfill.sources import list_sources
+
             self.sources = {item["label"]: item["id"] for item in list_sources()}
             ui.caption(self, "Run edits on").pack(anchor="w", pady=(12, 0))
             self.source = ui.Select(self, CW, command=self.choose_source)
@@ -701,7 +735,10 @@ class EngineView(tk.Frame):
             self.source_url = ui.small(self, "")
             self.source_url.pack(anchor="w", pady=(8, 0))
             self.sync_source()
-            ui.small(self, "Start ComfyUI on the chosen computer. OpenFill connects to that source and lists its available Qwen, FIBO, and SDXL edit models.").pack(fill="x", pady=(8, 0))
+            ui.small(
+                self,
+                "Start ComfyUI on the chosen computer. OpenFill connects to that source and lists its available Qwen, FIBO, and SDXL edit models.",
+            ).pack(fill="x", pady=(8, 0))
             row = ui.frame(self)
             row.pack(anchor="w", pady=(12, 0))
             ui.Button(row, "Check", self.check).pack(side="left")
@@ -723,13 +760,16 @@ class EngineView(tk.Frame):
         def work() -> None:
             try:
                 result = self.bar.service.select_source(source_id)
-                text = (f"Using {result['name']}. " if result["ok"] else f"{result['name']} is selected but unavailable. ") + result["detail"]
+                text = (
+                    f"Using {result['name']}. " if result["ok"] else f"{result['name']} is selected but unavailable. "
+                ) + result["detail"]
                 self.bar.call_soon(self.say, text, OK if result["ok"] else BAD)
             except Exception as err:
                 self.bar.call_soon(self.say, str(err), BAD)
             finally:
                 self.bar.refresher.wake.set()
                 self.bar.call_soon(self.sync_source)
+
         threading.Thread(target=work, daemon=True).start()
 
     def say(self, text: str, color: str = OK) -> None:
@@ -748,8 +788,12 @@ class EngineView(tk.Frame):
 
     def check(self) -> None:
         bar = self.bar
-        self.say("Checking the selected ComfyUI source..." if bar.service.app.settings.remote_fibo else
-                 "Checking the AI engine (starting it takes about a minute)...", DIM)
+        self.say(
+            "Checking the selected ComfyUI source..."
+            if bar.service.app.settings.remote_fibo
+            else "Checking the AI engine (starting it takes about a minute)...",
+            DIM,
+        )
 
         def work() -> None:
             try:
@@ -798,9 +842,18 @@ class GenerationView(tk.Frame):
         if bar.service.app.settings.remote_fibo:
             for child in self.winfo_children():
                 child.pack_forget()
-            ui.small(self, "FIBO: describe the change; Turbo 4 steps / CFG 1, Dev 30 steps / CFG 5. SDXL: describe the desired selected content (for example, a blue ceramic teapot); 25 steps / CFG 6, DPM++ 2M/Karras, 75% change strength. Pixels outside the selection are preserved.").pack(fill="x", pady=(12, 0))
-            ui.small(self, "Qwen Image 2.1: describe the change and what to keep. Lightning v2 RL uses its own four-step schedule.").pack(fill="x", pady=(8, 0))
-            ui.small(self, "The PhotoCraft selection controls the visible edit. Auto-feather softens its edges inward without growing the selection.").pack(fill="x", pady=(12, 0))
+            ui.small(
+                self,
+                "FIBO: describe the change; Turbo 4 steps / CFG 1, Dev 30 steps / CFG 5. SDXL: describe the desired selected content (for example, a blue ceramic teapot); 25 steps / CFG 6, DPM++ 2M/Karras, 75% change strength. Pixels outside the selection are preserved.",
+            ).pack(fill="x", pady=(12, 0))
+            ui.small(
+                self,
+                "Qwen Image 2.1: describe the change and what to keep. Lightning v2 RL uses its own four-step schedule.",
+            ).pack(fill="x", pady=(8, 0))
+            ui.small(
+                self,
+                "The PhotoCraft selection controls the visible edit. Auto-feather softens its edges inward without growing the selection.",
+            ).pack(fill="x", pady=(12, 0))
             self.result = ui.small(self, "")
         self.auto_feather = ui.Checkbox(self, "Auto-feather selection")
         self.auto_feather.pack(fill="x", pady=(12, 0))
@@ -811,14 +864,28 @@ class GenerationView(tk.Frame):
         self.auto_feather_amount.pack(side="right")
         self.auto_feather_percent = tk.DoubleVar(self, 10.0)
         self.auto_feather_slider = tk.Scale(
-            self, from_=0, to=100, resolution=1, orient="horizontal", showvalue=False,
-            variable=self.auto_feather_percent, length=CW, width=12,
-            bg=BG, fg=ui.TEXT, troughcolor=ui.PANEL, activebackground=ui.ACCENT,
-            highlightthickness=0, bd=0, sliderrelief="flat", relief="flat",
+            self,
+            from_=0,
+            to=100,
+            resolution=1,
+            orient="horizontal",
+            showvalue=False,
+            variable=self.auto_feather_percent,
+            length=CW,
+            width=12,
+            bg=BG,
+            fg=ui.TEXT,
+            troughcolor=ui.PANEL,
+            activebackground=ui.ACCENT,
+            highlightthickness=0,
+            bd=0,
+            sliderrelief="flat",
+            relief="flat",
         )
         self.auto_feather_slider.pack(fill="x", pady=(2, 0))
         self.auto_feather_help = ui.small(
-            self, "Soften edges over roughly the outer 10% of the selected area. Larger selections get a wider feather; the selection does not grow.",
+            self,
+            "Soften edges over roughly the outer 10% of the selected area. Larger selections get a wider feather; the selection does not grow.",
         )
         self.auto_feather_help.pack(fill="x", pady=(4, 0))
         self.auto_feather.var.trace_add("write", self._sync_auto_feather)
@@ -842,7 +909,11 @@ class GenerationView(tk.Frame):
         self.fibo_context_mode.pack(fill="x", pady=(8, 0))
         self.fibo_context_percent = tk.DoubleVar(self, 100.0)
         self.fibo_context_amount, self.fibo_context_slider = self._fibo_slider(
-            box, "Context margin", self.fibo_context_percent, 25, 200,
+            box,
+            "Context margin",
+            self.fibo_context_percent,
+            25,
+            200,
         )
         self.fibo_context_help = ui.small(box, "")
         self.fibo_context_help.pack(fill="x", pady=(4, 0))
@@ -850,9 +921,15 @@ class GenerationView(tk.Frame):
         self.fibo_boundary_match.pack(fill="x", pady=(12, 0))
         self.fibo_boundary_strength = tk.DoubleVar(self, 50.0)
         self.fibo_boundary_amount, self.fibo_boundary_slider = self._fibo_slider(
-            box, "Matching strength", self.fibo_boundary_strength, 0, 100,
+            box,
+            "Matching strength",
+            self.fibo_boundary_strength,
+            0,
+            100,
         )
-        ui.small(box, "Reduce color seams at selection edges. This does not reconnect mismatched shapes.").pack(fill="x", pady=(4, 0))
+        ui.small(box, "Reduce color seams at selection edges. This does not reconnect mismatched shapes.").pack(
+            fill="x", pady=(4, 0)
+        )
         self.fibo_context_percent.trace_add("write", self._sync_fibo)
         self.fibo_boundary_strength.trace_add("write", self._sync_fibo)
         self.fibo_boundary_match.var.trace_add("write", self._sync_fibo)
@@ -866,28 +943,47 @@ class GenerationView(tk.Frame):
         amount = ui.small(row, "", wrap=0)
         amount.pack(side="right")
         slider = tk.Scale(
-            parent, from_=low, to=high, resolution=1, orient="horizontal", showvalue=False,
-            variable=variable, length=CW, width=12, bg=BG, fg=ui.TEXT,
-            troughcolor=ui.PANEL, activebackground=ui.ACCENT, highlightthickness=0,
-            bd=0, sliderrelief="flat", relief="flat",
+            parent,
+            from_=low,
+            to=high,
+            resolution=1,
+            orient="horizontal",
+            showvalue=False,
+            variable=variable,
+            length=CW,
+            width=12,
+            bg=BG,
+            fg=ui.TEXT,
+            troughcolor=ui.PANEL,
+            activebackground=ui.ACCENT,
+            highlightthickness=0,
+            bd=0,
+            sliderrelief="flat",
+            relief="flat",
         )
         slider.pack(fill="x", pady=(2, 0))
         return amount, slider
 
     def _sync_fibo(self, *_args) -> None:
         preserve = self.fibo_edit_mode.get() == FIBO_EDIT_MODES["preserve"]
-        self.fibo_mode_help.configure(text=(
-            "Starts from the original pixels and limits regeneration to the selection, retaining more of the existing structure. Some details may still change."
-            if preserve else "Rebuild the selected content using its surroundings. Original details inside may be replaced."
-        ))
+        self.fibo_mode_help.configure(
+            text=(
+                "Starts from the original pixels and limits regeneration to the selection, retaining more of the existing structure. Some details may still change."
+                if preserve
+                else "Rebuild the selected content using its surroundings. Original details inside may be replaced."
+            )
+        )
         full = self.fibo_context_mode.get() == FIBO_CONTEXT_MODES["full"]
         amount = self.fibo_context_percent.get()
         self.fibo_context_amount.configure(text=f"{amount:g}%")
         self.fibo_context_slider.configure(state="disabled" if full else "normal")
-        self.fibo_context_help.configure(text=(
-            "Use the full image as context. Small selections may lose fine detail at the model's working resolution."
-            if full else f"Include a margin on each side equal to {amount:g}% of the selection's larger dimension. The editable area stays the same."
-        ))
+        self.fibo_context_help.configure(
+            text=(
+                "Use the full image as context. Small selections may lose fine detail at the model's working resolution."
+                if full
+                else f"Include a margin on each side equal to {amount:g}% of the selection's larger dimension. The editable area stays the same."
+            )
+        )
         self.fibo_boundary_amount.configure(text=f"{self.fibo_boundary_strength.get():g}%")
         self.fibo_boundary_slider.configure(state="normal" if self.fibo_boundary_match.get() else "disabled")
 
@@ -902,7 +998,9 @@ class GenerationView(tk.Frame):
     def fibo_values(self) -> dict[str, Any]:
         return {
             "fibo_edit_mode": {label: key for key, label in FIBO_EDIT_MODES.items()}.get(self.fibo_edit_mode.get(), ""),
-            "fibo_context_mode": {label: key for key, label in FIBO_CONTEXT_MODES.items()}.get(self.fibo_context_mode.get(), ""),
+            "fibo_context_mode": {label: key for key, label in FIBO_CONTEXT_MODES.items()}.get(
+                self.fibo_context_mode.get(), ""
+            ),
             "fibo_context_percent": self.fibo_context_percent.get(),
             "fibo_boundary_match": self.fibo_boundary_match.get(),
             "fibo_boundary_strength": self.fibo_boundary_strength.get(),

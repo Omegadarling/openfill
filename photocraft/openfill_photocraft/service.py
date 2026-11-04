@@ -262,8 +262,13 @@ class Service:
             source = self.app.select_source(source_id)
             self.engine = ""
             health = self.app.check_backend()
-            return {"source": source.id, "name": source.label, "ok": health.ok,
-                    "detail": health.detail, "device": getattr(health, "device", "")}
+            return {
+                "source": source.id,
+                "name": source.label,
+                "ok": health.ok,
+                "detail": health.detail,
+                "device": getattr(health, "device", ""),
+            }
         finally:
             self._switching = False
             self._operation_lock.release()
@@ -297,7 +302,9 @@ class Service:
     def _start(self, kind: str, params: dict[str, Any]) -> None:
         if self.app.settings.remote_fibo:
             if kind != "fill" or params.get("remove"):
-                raise RuntimeError("This integration supports prompted editing. Use Edit with a selection, or Select All.")
+                raise RuntimeError(
+                    "This integration supports prompted editing. Use Edit with a selection, or Select All."
+                )
             if not str(params.get("prompt", "")).strip():
                 raise RuntimeError("Describe the desired edit or selected content.")
         if self.busy():
@@ -377,7 +384,9 @@ class Service:
                     str(p.get("prompt", "")),
                     str(p.get("negative", "")),
                     variations,
-                    None if self.app.settings.remote_fibo and p.get("strength") is None else float(p.get("strength", 1.0)),
+                    None
+                    if self.app.settings.remote_fibo and p.get("strength") is None
+                    else float(p.get("strength", 1.0)),
                     seed,
                     model,
                     remove=bool(p.get("remove")),

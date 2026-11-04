@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Ordered edit-reference transport and FIBO target geometry regressions."""
 
-from dataclasses import replace
 import unittest
+from dataclasses import replace
 from unittest.mock import Mock
 
 from openfill import png, workflow
@@ -15,15 +15,30 @@ def rgb(color: bytes) -> bytes:
 
 
 def request(spec, references=(), **options):
-    return InpaintRequest(rgb(b"\xff\xff\xff"), png.encode(2, 2, b"\xff" * 4, 1), 2, 2, 1024, 1024,
-                         "Insert the object from image two.", "", spec, reference_images=references, **options)
+    return InpaintRequest(
+        rgb(b"\xff\xff\xff"),
+        png.encode(2, 2, b"\xff" * 4, 1),
+        2,
+        2,
+        1024,
+        1024,
+        "Insert the object from image two.",
+        "",
+        spec,
+        reference_images=references,
+        **options,
+    )
 
 
 class ReferenceImageTests(unittest.TestCase):
     def setUp(self):
-        self.qwen = ModelSpec(arch="qwen_image", template="qwen21_edit",
-                              unet="qwen_image_2.1_lightning_v2_rl_bf16.safetensors",
-                              clip1="qwen3vl_8b_fp8_scaled.safetensors", vae="qwen_image_2.1_vae_bf16.safetensors")
+        self.qwen = ModelSpec(
+            arch="qwen_image",
+            template="qwen21_edit",
+            unet="qwen_image_2.1_lightning_v2_rl_bf16.safetensors",
+            clip1="qwen3vl_8b_fp8_scaled.safetensors",
+            vae="qwen_image_2.1_vae_bf16.safetensors",
+        )
         self.first = rgb(b"\xff\x00\x00")
         self.second = rgb(b"\x00\xff\x00")
         self.client = Mock()
@@ -57,9 +72,8 @@ class ReferenceImageTests(unittest.TestCase):
             (ModelSpec(arch="sdxl", template="sdxl_edit"), self.first, "does not support reference images"),
             (self.qwen, b"not-a-png", "Image 2 is not an encoded PNG"),
         ):
-            with self.subTest(template=spec.template):
-                with self.assertRaisesRegex(WorkflowRejected, message):
-                    self.backend.inpaint(request(spec, (ref,)))
+            with self.subTest(template=spec.template), self.assertRaisesRegex(WorkflowRejected, message):
+                self.backend.inpaint(request(spec, (ref,)))
         self.client.upload_image.assert_not_called()
         self.backend._run.assert_not_called()
 
@@ -71,25 +85,34 @@ class ReferenceImageTests(unittest.TestCase):
         self.backend._run.assert_not_called()
 
     def test_fibo_both_modes_keep_their_target_slot_when_adding_references(self):
-        spec = ModelSpec(arch="fibo2", template="fibo2_edit", unet="fibo2_dev_nvfp4.safetensors",
-                         clip1="qwen3vl_4b_bf16.safetensors", vae="flux2-vae.safetensors")
+        spec = ModelSpec(
+            arch="fibo2",
+            template="fibo2_edit",
+            unet="fibo2_dev_nvfp4.safetensors",
+            clip1="qwen3vl_4b_bf16.safetensors",
+            vae="flux2-vae.safetensors",
+        )
         self.assertEqual(edit_reference_options(spec.effective_template), (15, "<image_N>"))
         for mode, expected_target in (("preserve", "image_scale"), ("replace", "selection_guide")):
             with self.subTest(mode=mode):
                 req = request(spec, (self.first,), fibo_edit_mode=mode)
-                graph = workflow.build_fill(req, "target.png", "mask.png", 42, workflow.Capabilities(),
-                                            reference_refs=("extra.png",))
+                graph = workflow.build_fill(
+                    req, "target.png", "mask.png", 42, workflow.Capabilities(), reference_refs=("extra.png",)
+                )
                 self.assertEqual(graph["encode"]["inputs"]["images.image_1"], [expected_target, 0])
                 self.assertEqual(graph["encode"]["inputs"]["images.image_2"], ["reference_2", 0])
                 self.assertEqual(graph["reference_2"]["inputs"]["image"], "extra.png")
-                self.assertEqual(graph["sampler"]["inputs"]["latent_image"],
-                                 ["latent_mask", 0] if mode == "preserve" else ["encode", 2])
+                self.assertEqual(
+                    graph["sampler"]["inputs"]["latent_image"],
+                    ["latent_mask", 0] if mode == "preserve" else ["encode", 2],
+                )
                 self.assertEqual(graph["selection_composite"]["inputs"]["mask"], ["selection_support", 0])
 
     def test_builder_does_not_silently_omit_references(self):
         with self.assertRaisesRegex(ValueError, "uploaded reference list does not match"):
-            workflow.build_fill(request(self.qwen, (self.first,)), "target.png", "mask.png", 42,
-                                workflow.Capabilities())
+            workflow.build_fill(
+                request(self.qwen, (self.first,)), "target.png", "mask.png", 42, workflow.Capabilities()
+            )
 
 
 if __name__ == "__main__":

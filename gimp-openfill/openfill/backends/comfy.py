@@ -184,8 +184,9 @@ class ComfyBackend(Backend):
             )
         prefix = f"openfill/{request.mode}-{job}"
         try:
-            graph = workflow.build_fill(request, image_ref, mask_ref, seed, caps, filename_prefix=prefix,
-                                        reference_refs=tuple(reference_refs))
+            graph = workflow.build_fill(
+                request, image_ref, mask_ref, seed, caps, filename_prefix=prefix, reference_refs=tuple(reference_refs)
+            )
         except ValueError as err:
             raise WorkflowRejected(str(err)) from err
         pixels = int(getattr(request, "work_pixels", 0) or request.work_width * request.work_height)
@@ -203,8 +204,9 @@ class ComfyBackend(Backend):
                 self.log.warning("server has no OpenCV; retrying with neutral pre-fill")
             request.prefill_mode = "neutral"
             fallback = True
-            graph = workflow.build_fill(request, image_ref, mask_ref, seed, caps, filename_prefix=prefix,
-                                        reference_refs=tuple(reference_refs))
+            graph = workflow.build_fill(
+                request, image_ref, mask_ref, seed, caps, filename_prefix=prefix, reference_refs=tuple(reference_refs)
+            )
             images = self._run(
                 graph, request.sampling.steps, request.sampling.batch, pixels, progress, preview, cancel, request.model
             )

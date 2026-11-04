@@ -5,6 +5,7 @@ left to measure. Sample a narrow inner ring instead, reject large/variable
 differences as content, and fade the correction before reaching the interior.
 This adjusts color drift; it cannot align displaced objects or contours.
 """
+
 from __future__ import annotations
 
 import math
@@ -12,8 +13,9 @@ import math
 from . import quality
 
 
-def match_boundary(width: int, height: int, original: bytes, generated: bytes,
-                   mask: bytes, strength: float = 0.5) -> bytes:
+def match_boundary(
+    width: int, height: int, original: bytes, generated: bytes, mask: bytes, strength: float = 0.5
+) -> bytes:
     """Return RGBA with small edge color offsets corrected; alpha/exterior stay exact."""
     if width < 1 or height < 1 or len(mask) != width * height:
         raise ValueError("Boundary mask dimensions do not match")
@@ -38,7 +40,7 @@ def match_boundary(width: int, height: int, original: bytes, generated: bytes,
     # color ramp and avoids several full-canvas Python integer arrays.
     step = max(1, math.ceil(max(width, height) / quality.SEAM_SIDE))
     sw, sh = math.ceil(width / step), math.ceil(height / step)
-    small = b"".join(inverse[y * width:(y + 1) * width:step] for y in range(0, height, step))
+    small = b"".join(inverse[y * width : (y + 1) * width : step] for y in range(0, height, step))
     distance = quality.signed_distance(sw, sh, small)
     output = bytearray(generated)
     reach = 2 * band

@@ -12,7 +12,6 @@ from uuid import uuid4
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-
 MAX_REFERENCES = 15
 MAX_UPLOAD = 16 * 1024 * 1024
 MAX_TOTAL = 64 * 1024 * 1024
@@ -101,8 +100,12 @@ class ReferenceImages:
     def order(self, ids):
         with self._lock:
             by_id = {item.id: item for item in self._items}
-            if (not isinstance(ids, list) or any(not isinstance(item, str) for item in ids)
-                    or len(ids) != len(by_id) or set(ids) != by_id.keys()):
+            if (
+                not isinstance(ids, list)
+                or any(not isinstance(item, str) for item in ids)
+                or len(ids) != len(by_id)
+                or set(ids) != by_id.keys()
+            ):
                 raise ValueError("The reference list changed. Refresh it before reordering.")
             self._items = [by_id[reference_id] for reference_id in ids]
             return [item.row() for item in self._items]

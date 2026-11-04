@@ -99,10 +99,16 @@ class Api:
                 row["neededBy"] = needed_by(list(app.catalog), row["id"])
         if app.settings.remote_fibo:
             from openfill.sources import get_source
+
             if source_id != app.settings.fibo_source:
                 rows, source_id = [], app.settings.fibo_source
-            return {"rows": rows, "current": current, "pending": pending, "source": source_id,
-                    "hardware": f"{get_source(source_id).label} · ComfyUI"}
+            return {
+                "rows": rows,
+                "current": current,
+                "pending": pending,
+                "source": source_id,
+                "hardware": f"{get_source(source_id).label} · ComfyUI",
+            }
         hw = None
         try:
             from openfill import hardware
@@ -151,9 +157,12 @@ class Api:
 
     def sources(self) -> dict[str, Any]:
         from openfill.sources import list_sources
+
         selected = self.service.app.settings.fibo_source
-        return {"selected": selected, "sources": [dict(item, name=item["label"], selected=item["id"] == selected)
-                                                    for item in list_sources()]}
+        return {
+            "selected": selected,
+            "sources": [dict(item, name=item["label"], selected=item["id"] == selected) for item in list_sources()],
+        }
 
     # POST -----------------------------------------------------------------------------
 

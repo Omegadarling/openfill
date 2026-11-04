@@ -24,6 +24,7 @@ from typing import Any
 from . import caption, comfy_setup, geometry, hardware, local_models, png, quality, ui_text, workflow
 from . import catalog as cat
 from .backend import (
+    QWEN21_EDIT_TEMPLATE,
     SETTINGS_MENU,
     Backend,
     BackendError,
@@ -32,7 +33,6 @@ from .backend import (
     InpaintRequest,
     ModelMissing,
     ModelSpec,
-    QWEN21_EDIT_TEMPLATE,
     Sampling,
     Txt2ImgRequest,
     edit_reference_options,
@@ -181,8 +181,7 @@ class App:
         from .remote_models import RemoteModels
 
         with self._source_lock:
-            selected = replace(self.settings, fibo_source=source.id, url=source.url,
-                               autostart=False, backend="comfyui")
+            selected = replace(self.settings, fibo_source=source.id, url=source.url, autostart=False, backend="comfyui")
             try:
                 selected.save(self.paths.config)
             except OSError as err:
@@ -207,7 +206,9 @@ class App:
             return A1111Backend(url, timeout, self.log)
         self._check_device(url)
         backend = ComfyBackend(
-            url, request_timeout=timeout, logger=self.log,
+            url,
+            request_timeout=timeout,
+            logger=self.log,
             models_root=None if self.settings.remote_fibo else self.models_root,
             shared_queue=self.settings.remote_fibo,
         )
@@ -295,7 +296,9 @@ class App:
             try:
                 entry = cat.by_id(self.catalog, model_id)
             except cat.CatalogError:
-                raise ModelMissing(self.remote_models.error or f"Choose an available edit model on {self.source_label()}.") from None
+                raise ModelMissing(
+                    self.remote_models.error or f"Choose an available edit model on {self.source_label()}."
+                ) from None
             return entry, cat.model_spec_for(entry)
         choice = (choice or "active").strip()
         if choice == "active":
@@ -454,7 +457,9 @@ class App:
         if self.settings.remote_fibo:
             self.refresh_remote_models()
             if not self.catalog:
-                raise BackendUnavailable(self.remote_models.error or f"ComfyUI on {self.source_label()} is unavailable.")
+                raise BackendUnavailable(
+                    self.remote_models.error or f"ComfyUI on {self.source_label()} is unavailable."
+                )
             return
         if self.settings.backend != "comfyui" or comfy_layout(self.settings.comfy_dir) is not None:
             return
@@ -471,8 +476,11 @@ class App:
         rows = []
         for e in self.catalog:
             max_references, reference_syntax = edit_reference_options(e.template)
-            st = (cat.InstallStatus(True, seen_by_server=True) if self.settings.remote_fibo
-                  else cat.install_status(e, self.models_root, self.custom_nodes_dir, self.catalog, server_files))
+            st = (
+                cat.InstallStatus(True, seen_by_server=True)
+                if self.settings.remote_fibo
+                else cat.install_status(e, self.models_root, self.custom_nodes_dir, self.catalog, server_files)
+            )
             label = st.label
             if label == "Available" and e.gated and not self.settings.hf_token:
                 label = "Needs token"
@@ -488,7 +496,9 @@ class App:
                     "license": e.license_name,
                     "license_url": e.license_url,
                     "page": e.page,
-                    "source": "existing checkpoint" if self.settings.remote_fibo and e.arch == "sdxl" else ("first-party" if e.source_type == "first-party" else "community quant"),
+                    "source": "existing checkpoint"
+                    if self.settings.remote_fibo and e.arch == "sdxl"
+                    else ("first-party" if e.source_type == "first-party" else "community quant"),
                     "uploader": e.uploader,
                     "gated": e.gated,
                     "runnable": e.runnable,
@@ -546,8 +556,9 @@ class App:
         if self.settings.remote_fibo:
             self.refresh_remote_models()
             ids = [e.id for e in self.catalog]
-            if (self.settings.active_model.startswith("remote-fibo2-") and
-                    self.settings.active_model.endswith("-heretic")):
+            if self.settings.active_model.startswith("remote-fibo2-") and self.settings.active_model.endswith(
+                "-heretic"
+            ):
                 # An unavailable optional encoder must not silently become the
                 # original encoder when changing hosts or refreshing the list.
                 return self.settings.active_model
@@ -896,8 +907,11 @@ class App:
         fibo_mode = self.settings.fibo_edit_mode
         fibo_context_mode = self.settings.fibo_context_mode
         fibo_context_percent = float(self.settings.fibo_context_percent)
-        boundary_strength = (float(self.settings.fibo_boundary_strength) / 100.0
-                             if fibo_edit and self.settings.fibo_boundary_match else 0.0)
+        boundary_strength = (
+            float(self.settings.fibo_boundary_strength) / 100.0
+            if fibo_edit and self.settings.fibo_boundary_match
+            else 0.0
+        )
         auto_feather = self.settings.auto_feather
         auto_feather_percent = self.settings.auto_feather_percent
         if strength is None:
@@ -917,8 +931,7 @@ class App:
             profile,
             model.arch,
             removal_intent,
-            (fibo_context_percent / 100.0 if fibo_edit
-             else geometry.fill_padding(removal_intent, model.prompt_free)),
+            (fibo_context_percent / 100.0 if fibo_edit else geometry.fill_padding(removal_intent, model.prompt_free)),
             refine=refine,
             layout=False if selection_edit else float(self.settings.tile_denoise) < 1.0,
             layout_min_scale=float(self.settings.layout_min_scale),
@@ -1013,10 +1026,16 @@ class App:
             # result layer. The graph keeps hard support; PhotoCraft blends its
             # soft alpha once, with no additional layer grow/feather operation.
             mask_raw = feather_selection(
-                mask_raw, ctx.width, ctx.height, auto_feather_percent,
-                canvas_edges=(ctx.x <= full.x, ctx.y <= full.y,
-                              ctx.x + ctx.width >= full.x + full.width,
-                              ctx.y + ctx.height >= full.y + full.height),
+                mask_raw,
+                ctx.width,
+                ctx.height,
+                auto_feather_percent,
+                canvas_edges=(
+                    ctx.x <= full.x,
+                    ctx.y <= full.y,
+                    ctx.x + ctx.width >= full.x + full.width,
+                    ctx.y + ctx.height >= full.y + full.height,
+                ),
             )
             layer_mask = mask_raw
             mask_png = png.encode(ctx.width, ctx.height, mask_raw, 1)

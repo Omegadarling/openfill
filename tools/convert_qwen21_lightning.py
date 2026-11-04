@@ -13,7 +13,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 SOURCE_REVISION = "682b2529ffb5ae9ba39ceb81a31ce99e602da2ee"
 SOURCE_SHA256 = "4952ed381a112fa4725d4aa679050179482267b7e4c308a067b5ca0ca8915248"
 SOURCE_SIZE = 28_460_533_992
@@ -127,7 +126,11 @@ def convert(source_path, output_path):
                 temporary.flush()
                 os.fsync(temporary.fileno())
             os.link(temporary_path, output_path)
-        print(json.dumps({"path": str(output_path), "bytes": output_path.stat().st_size, "sha256": output_hash.hexdigest()}))
+        print(
+            json.dumps(
+                {"path": str(output_path), "bytes": output_path.stat().st_size, "sha256": output_hash.hexdigest()}
+            )
+        )
     finally:
         if temporary_path is not None:
             temporary_path.unlink()

@@ -1,5 +1,5 @@
-"""Connect the selected FIBO source; never start or stop its ComfyUI process.
-"""
+"""Connect the selected FIBO source; never start or stop its ComfyUI process."""
+
 from __future__ import annotations
 
 import atexit
@@ -36,26 +36,44 @@ def _ensure_connection(url: str, profile: Path, *, port: int, source_id: str | N
     if ComfyClient(url, timeout=3).is_alive():
         return None
     if source.ssh_alias is None:
-        raise RuntimeError(f"ComfyUI on {source.label} is not answering at {url}. Start its existing ComfyUI, then use Engine > Check.")
+        raise RuntimeError(
+            f"ComfyUI on {source.label} is not answering at {url}. Start its existing ComfyUI, then use Engine > Check."
+        )
     if parsed.hostname not in ("127.0.0.1", "localhost") or parsed.port != port:
         raise RuntimeError(f"ComfyUI on {source.label} is not answering at {url}; check its server connection.")
     with socket.socket() as probe:
         probe.settimeout(0.5)
         if probe.connect_ex(("127.0.0.1", port)) == 0:
-            raise RuntimeError(f"Port {port} is occupied but {source.label} ComfyUI is not answering. Check the existing SSH connection.")
+            raise RuntimeError(
+                f"Port {port} is occupied but {source.label} ComfyUI is not answering. Check the existing SSH connection."
+            )
     profile.mkdir(parents=True, exist_ok=True)
     log_name = f"{source.id}-ssh.log"
-    log = open(profile / log_name, "ab")
-    try:
+    with (profile / log_name).open("ab") as log:
         child = subprocess.Popen(
-            ["ssh", "-N", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
-             "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30",
-             "-o", "ServerAliveCountMax=3", "-L", f"127.0.0.1:{port}:127.0.0.1:{source.remote_port}", source.ssh_alias],
-            stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+            [
+                "ssh",
+                "-N",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=8",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-o",
+                "ServerAliveInterval=30",
+                "-o",
+                "ServerAliveCountMax=3",
+                "-L",
+                f"127.0.0.1:{port}:127.0.0.1:{source.remote_port}",
+                source.ssh_alias,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-    finally:
-        log.close()
+
     def stop_owned_tunnel():
         if child.poll() is None:
             child.terminate()
@@ -63,6 +81,7 @@ def _ensure_connection(url: str, profile: Path, *, port: int, source_id: str | N
                 child.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 child.kill()
+
     atexit.register(stop_owned_tunnel)
     until = time.monotonic() + 15
     while time.monotonic() < until and child.poll() is None:
@@ -70,4 +89,6 @@ def _ensure_connection(url: str, profile: Path, *, port: int, source_id: str | N
             return child
         time.sleep(0.25)
     stop_owned_tunnel()
-    raise RuntimeError(f"Cannot connect to {source.label}. Check that {source.label} and its ComfyUI service are running; see {log_name}.")
+    raise RuntimeError(
+        f"Cannot connect to {source.label}. Check that {source.label} and its ComfyUI service are running; see {log_name}."
+    )

@@ -4,6 +4,7 @@ This is an allowlist of inspected full checkpoints, not filename-based model
 classification. Unknown files, refiners and LoRAs are never offered as editors.
 New records require a safetensors-header audit and sampling compatibility check.
 """
+
 from __future__ import annotations
 
 import json
@@ -36,17 +37,28 @@ def _load_registry(path: Path | None = None) -> tuple[VerifiedSDXL, ...]:
     for item in data["checkpoints"]:
         key = (item["source_id"], _path(item["checkpoint"]))
         channels = item["input_channels"]
-        if (key in seen or item["source_id"] not in {source.id for source in SOURCES}
-                or channels not in (4, 9) or not item["classification"].startswith("sdxl_")
-                or item.get("sampling_profile") != "generic-sdxl"
-                or not all(item.get(field) is True for field in ("embedded_clip_l", "embedded_clip_g", "embedded_vae"))
-                or len(item["header_sha256"]) != 64):
+        if (
+            key in seen
+            or item["source_id"] not in {source.id for source in SOURCES}
+            or channels not in (4, 9)
+            or not item["classification"].startswith("sdxl_")
+            or item.get("sampling_profile") != "generic-sdxl"
+            or not all(item.get(field) is True for field in ("embedded_clip_l", "embedded_clip_g", "embedded_vae"))
+            or len(item["header_sha256"]) != 64
+        ):
             raise ValueError(f"Invalid verified SDXL record: {key}")
         seen.add(key)
-        records.append(VerifiedSDXL(
-            source_id=item["source_id"], checkpoint=item["checkpoint"], model_id=item["model_id"],
-            name=item["name"], input_channels=channels, size=item["size"], header_sha256=item["header_sha256"],
-        ))
+        records.append(
+            VerifiedSDXL(
+                source_id=item["source_id"],
+                checkpoint=item["checkpoint"],
+                model_id=item["model_id"],
+                name=item["name"],
+                input_channels=channels,
+                size=item["size"],
+                header_sha256=item["header_sha256"],
+            )
+        )
     return tuple(records)
 
 
@@ -92,14 +104,30 @@ def discover_sdxl(client: ComfyClient, source_label: str) -> list[ModelEntry]:
         if absent:
             missing_nodes.update(absent)
             continue
-        entries.append(ModelEntry(
-            id=item.model_id, name=f"{item.name} · {source.label}", tier="edit",
-            capabilities=("fill", "edit"), arch="sdxl", template=template,
-            page="", license_name="Existing checkpoint's license", license_url="", gated=False,
-            source_type="existing-checkpoint", uploader="Existing model on " + source.label,
-            min_vram_gb=8, requires_nodes=(), requires_models=(), source="remote", family="sdxl",
-            files=(FileSpec("checkpoint", "", "checkpoints/" + filename, size=item.size),),
-        ))
+        entries.append(
+            ModelEntry(
+                id=item.model_id,
+                name=f"{item.name} · {source.label}",
+                tier="edit",
+                capabilities=("fill", "edit"),
+                arch="sdxl",
+                template=template,
+                page="",
+                license_name="Existing checkpoint's license",
+                license_url="",
+                gated=False,
+                source_type="existing-checkpoint",
+                uploader="Existing model on " + source.label,
+                min_vram_gb=8,
+                requires_nodes=(),
+                requires_models=(),
+                source="remote",
+                family="sdxl",
+                files=(FileSpec("checkpoint", "", "checkpoints/" + filename, size=item.size),),
+            )
+        )
     if not entries and missing_nodes:
-        raise BackendUnavailable(f"{source.label}'s SDXL editing nodes are unavailable: {', '.join(sorted(missing_nodes))}.")
+        raise BackendUnavailable(
+            f"{source.label}'s SDXL editing nodes are unavailable: {', '.join(sorted(missing_nodes))}."
+        )
     return entries

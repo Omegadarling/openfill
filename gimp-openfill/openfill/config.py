@@ -293,8 +293,9 @@ class Settings:
             data = {f.name: getattr(self, f.name) for f in fields(self) if f.metadata.get("persist", True)}
             temporary = None
             try:
-                with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=f".{path.name}.",
-                                                 suffix=".tmp", encoding="utf-8", delete=False) as file:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", encoding="utf-8", delete=False
+                ) as file:
                     temporary = Path(file.name)
                     file.write(json.dumps(data, indent=2) + "\n")
                 os.replace(temporary, path)

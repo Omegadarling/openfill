@@ -845,8 +845,10 @@ def model_spec_for(entry: ModelEntry, catalog: Iterable[ModelEntry] = (), models
     # Remote discoveries store category + '/' + the exact server option.
     # These are identifiers validated by ComfyUI, not client filesystem paths:
     # Windows backslashes and case must survive into the submitted graph.
-    names = {f.role: ((f.dest.partition("/")[2] or f.dest) if entry.source == "remote" else f.loader_name)
-             for f in entry.files}
+    names = {
+        f.role: ((f.dest.partition("/")[2] or f.dest) if entry.source == "remote" else f.loader_name)
+        for f in entry.files
+    }
     spec = ModelSpec(checkpoint=names.get("checkpoint", ""), arch=entry.arch, template=entry.template or "")
     spec.unet = names.get("unet", "")
     spec.clip1 = names.get("clip1", "")

@@ -44,8 +44,11 @@ def model_detail(row: dict[str, Any], needed_by: str = "") -> str:
         encoder = "Heretic NVFP4 encoder" if str(row.get("id", "")).endswith("-heretic") else "Original BF16 encoder"
         return f"{encoder} · instruction editing · selected area or whole image"
     if row.get("template") == "qwen21_edit":
-        profile = ("Lightning v2 RL · four steps" if str(row.get("id", "")).endswith("-lightning-v2-rl")
-                   else "Base BF16 checkpoint · 25 steps")
+        profile = (
+            "Lightning v2 RL · four steps"
+            if str(row.get("id", "")).endswith("-lightning-v2-rl")
+            else "Base BF16 checkpoint · 25 steps"
+        )
         return f"{profile} · instruction editing · selected area or whole image"
     if row.get("template") == "sdxl_edit":
         return "SDXL masked editing · describe the desired result · 75% change strength"

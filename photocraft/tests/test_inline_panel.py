@@ -18,11 +18,12 @@ except ImportError as err:
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")]
 
-from openfill.config import Settings  # noqa: E402
 from openfill_photocraft import ui  # noqa: E402
 from openfill_photocraft.bar import Bar  # noqa: E402
 from openfill_photocraft.references import ReferenceImages  # noqa: E402
 from openfill_photocraft.web import Api  # noqa: E402
+
+from openfill.config import Settings  # noqa: E402
 
 
 class InlinePanelTests(unittest.TestCase):
@@ -43,16 +44,33 @@ class InlinePanelTests(unittest.TestCase):
         service.reference_rows.side_effect = service.references.rows
         service.add_reference_files.side_effect = service.references.add_files
         watcher = Mock()
-        watcher.snapshot.return_value = {"connected": True, "document": {"name": "Edit.png"},
-                                         "selection": [0, 0, 64, 64]}
-        rows = [{"id": model_id, "name": name, "runnable": True, "installed": True,
-                 "active": model_id == self.qwen, "partial": [], "remote": True,
-                 "max_references": 15 if model_id == self.qwen else 0,
-                 "reference_syntax": "<imageN>" if model_id == self.qwen else ""}
-                for model_id, name in ((self.qwen, self.qwen_name), (self.sdxl, self.sdxl_name))]
+        watcher.snapshot.return_value = {
+            "connected": True,
+            "document": {"name": "Edit.png"},
+            "selection": [0, 0, 64, 64],
+        }
+        rows = [
+            {
+                "id": model_id,
+                "name": name,
+                "runnable": True,
+                "installed": True,
+                "active": model_id == self.qwen,
+                "partial": [],
+                "remote": True,
+                "max_references": 15 if model_id == self.qwen else 0,
+                "reference_syntax": "<imageN>" if model_id == self.qwen else "",
+            }
+            for model_id, name in ((self.qwen, self.qwen_name), (self.sdxl, self.sdxl_name))
+        ]
         refresher = Mock()
-        refresher.get.return_value = {"comfy_ok": True, "models": {"fill": [(r["id"], r["name"]) for r in rows]},
-                                      "rows": rows, "active": self.qwen, "active_name": self.qwen_name}
+        refresher.get.return_value = {
+            "comfy_ok": True,
+            "models": {"fill": [(r["id"], r["name"]) for r in rows]},
+            "rows": rows,
+            "active": self.qwen,
+            "active_name": self.qwen_name,
+        }
         native_tk = tk.Tk
 
         def hidden_root(*args, **kwargs):
@@ -65,13 +83,15 @@ class InlinePanelTests(unittest.TestCase):
             return root
 
         self.api = Api(service)
-        with patch("tkinter.Tk", side_effect=hidden_root), \
-             patch("openfill_photocraft.bar.Refresher", return_value=refresher), \
-             patch("openfill_photocraft.tether.Tether"), \
-             patch("openfill_photocraft.ui.make_borderless", return_value=False), \
-             patch.object(Bar, "_tick", lambda self: None), \
-             patch.object(Bar, "_drain", lambda self: None), \
-             patch.object(Bar, "_place", lambda self: self.root.withdraw()):
+        with (
+            patch("tkinter.Tk", side_effect=hidden_root),
+            patch("openfill_photocraft.bar.Refresher", return_value=refresher),
+            patch("openfill_photocraft.tether.Tether"),
+            patch("openfill_photocraft.ui.make_borderless", return_value=False),
+            patch.object(Bar, "_tick", lambda self: None),
+            patch.object(Bar, "_drain", lambda self: None),
+            patch.object(Bar, "_place", lambda self: self.root.withdraw()),
+        ):
             self.bar = Bar(service, watcher, "http://127.0.0.1/test", self.profile, api=self.api)
         self.bar.refresh_model_visibility()
 
@@ -133,7 +153,7 @@ class InlinePanelTests(unittest.TestCase):
     def test_attach_reorder_and_send_only_to_a_supported_model(self):
         bar = self.bar
         files = [self.profile / "first.png", self.profile / "second.png"]
-        for path, color in zip(files, ("red", "blue")):
+        for path, color in zip(files, ("red", "blue"), strict=False):
             Image.new("RGB", (16, 24), color).save(path)
         with patch("tkinter.filedialog.askopenfilenames", return_value=tuple(map(str, files))):
             bar.references.add.invoke()
