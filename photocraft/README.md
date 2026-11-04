@@ -53,7 +53,9 @@ Open **Manage Models** to control which models appear in the main dropdown. Clic
 
 Changes in **Generation** apply when you click **Generate** or press Enter in the prompt. OpenFill saves those choices once it accepts the job.
 
-<img src="https://raw.githubusercontent.com/Omegadarling/openfill/main/docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
+<img src="https://raw.githubusercontent.com/Omegadarling/openfill/main/docs/screenshots/photocraft-demo.gif" width="720" alt="The OpenFill fork shows a reference-guided teapot edit, result review controls, and model visibility settings in its rearrangeable panel.">
+
+Screenshot walkthrough with a saved Qwen Lightning edit. [Demo inputs from LightX2V](https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning-v2-RL#multi-reference-generation-1)
 
 ## What you need
 

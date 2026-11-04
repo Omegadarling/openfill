@@ -8,8 +8,9 @@
 
 **[Download OpenFill for PhotoCraft](https://github.com/Omegadarling/openfill/releases/latest)** · [Setup and model guide](photocraft/README.md)
 
-<img src="docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: an object removed and a selection filled from a prompt"><br>
-**Remove objects, fill a selection from a prompt, and expand the canvas, right inside your editor.**<br>
+<img src="docs/screenshots/photocraft-demo.gif" width="720" alt="The OpenFill fork adds a teapot reference to a PhotoCraft edit, shows the saved result and its review controls, then shows model visibility and panel layout settings."><br>
+**Add a reference, review the edit, and arrange the OpenFill panel.**<br>
+<sub>Screenshot walkthrough with a saved Qwen Lightning edit and <a href="https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning-v2-RL#multi-reference-generation-1">demo inputs from LightX2V</a>.</sub>
 
 </div>
 
