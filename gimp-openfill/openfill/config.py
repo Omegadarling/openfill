@@ -66,6 +66,19 @@ FIBO_PERCENT_RANGES = {
     "fibo_context_percent": (25.0, 200.0, 100.0, "Surrounding context"),
     "fibo_boundary_strength": (0.0, 100.0, 50.0, "Boundary color matching"),
 }
+GENERATION_FIELDS = {
+    "steps": int,
+    "cfg": float,
+    "grow_percent": float,
+    "feather_percent": float,
+    "auto_feather": bool,
+    "auto_feather_percent": float,
+    "fibo_edit_mode": str,
+    "fibo_context_mode": str,
+    "fibo_context_percent": float,
+    "fibo_boundary_match": bool,
+    "fibo_boundary_strength": float,
+}
 
 
 def validate_fibo_settings(values: dict[str, Any]) -> dict[str, Any]:
@@ -83,6 +96,32 @@ def validate_fibo_settings(values: dict[str, Any]) -> dict[str, Any]:
     if "fibo_boundary_match" in result and not isinstance(result["fibo_boundary_match"], bool):
         raise ValueError("Boundary color matching must be on or off.")
     return result
+
+
+def validate_generation_settings(values: Any) -> dict[str, Any]:
+    """Validate the settings supplied with a PhotoCraft job before saving them."""
+    if not isinstance(values, dict) or values.keys() - GENERATION_FIELDS.keys():
+        raise ValueError("Provide only Generation settings with a job.")
+    result = {}
+    for key, value in values.items():
+        kind = GENERATION_FIELDS[key]
+        if kind is bool:
+            if not isinstance(value, bool):
+                raise ValueError(f"{key} must be on or off.")
+        elif kind in (int, float):
+            if (
+                type(value) not in (int, float)
+                or not math.isfinite(value)
+                or (kind is int and not isinstance(value, int))
+            ):
+                raise ValueError(f"{key} must be a finite {'whole number' if kind is int else 'number'}.")
+            value = kind(value)
+        elif not isinstance(value, str):
+            raise ValueError(f"{key} must be a choice from the Generation section.")
+        result[key] = value
+    if "auto_feather_percent" in result:
+        result["auto_feather_percent"] = max(0.0, min(100.0, result["auto_feather_percent"]))
+    return validate_fibo_settings(result)
 
 
 def default_comfy_dir() -> str:

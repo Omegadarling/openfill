@@ -37,6 +37,8 @@ Choose a reference-capable model and use **Reference Images** to attach PNG, JPE
 
 Open **Manage Models** to control which models appear in the main dropdown. Click a section header to expand or collapse it, or drag its grip to move the section. OpenFill saves the section order, collapsed state, and model visibility in your profile.
 
+Changes in **Generation** apply when you click **Generate** or press Enter in the prompt. OpenFill saves those choices once it accepts the job.
+
 <img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 
 > **Version 0.2.4** fixes Mac prompt typing and model-menu focus, and lets you reuse ComfyUI's Python with the fallback panel in your default browser. It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. The Mac version passed Fill, Remove, Expand and Create on an M3 MacBook Air; see [the test results](../docs/evidence/macos-photocraft-2026-10-26/).

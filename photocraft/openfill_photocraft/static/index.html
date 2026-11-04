@@ -234,7 +234,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       </div>
       <div class="note" id="gen-out" hidden></div>
     </div>
-      <button class="btn" id="save-settings">Save generation settings</button>
+      <div class="small">Changes apply when you generate.</div>
     </div>
   </section>
 </main>
@@ -479,7 +479,39 @@ $("model").onchange=async()=>{const v=$("model").value;
   if(v&&v!==activeId&&!removers().has(v)){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
 function seedOf(){const v=$("seed").value.trim();return v===""?-1:parseInt(v)}
 function say(t,kind){note=t?{text:t,kind:kind||"bad",base:baseContext()[0]}:null;context()}
-async function start(kind,body){try{await post("/api/"+kind,body);lastSeq=-1;say("")}catch(e){say(e.message,"bad")}}
+const generationDirty = new Set();
+function trackGenerationEdit(event) {
+  if (event.target.id.startsWith("s-")) generationDirty.add(event.target.id);
+}
+$("sec-generation").addEventListener("input", trackGenerationEdit);
+$("sec-generation").addEventListener("change", trackGenerationEdit);
+function generationValues() {
+  const values = {};
+  for (const id of generationDirty) {
+    const input = $(id);
+    const value = input.type === "checkbox" ? input.checked
+      : ["number", "range"].includes(input.type) ? input.valueAsNumber : input.value;
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      throw new Error("Enter valid numbers in the Generation section.");
+    }
+    values[id.slice(2)] = value;
+  }
+  return values;
+}
+async function start(kind,body){
+  try {
+    const generation_settings = generationValues();
+    const submitted = [...generationDirty].map(id => [id, $(id).value, $(id).checked]);
+    await post("/api/"+kind, {...body, generation_settings});
+    for (const [id, value, checked] of submitted) {
+      if ($(id).value === value && $(id).checked === checked) generationDirty.delete(id);
+    }
+    lastSeq=-1;
+    say("");
+  } catch(e) {
+    say(e.message,"bad");
+  }
+}
 $("go").onclick=()=>{if(busy||!$("model").value||$("model").value==="__manage")return;const prompt=$("prompt").value.trim(),model=$("model").value;
   if(mode==="fill"||mode==="remove"){if(!sel){say(NO_SEL,"bad");return}
     const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:remoteFibo?undefined:(mode==="fill"?+$("strength").value:1),seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
@@ -612,10 +644,8 @@ function syncAutoFeather(){const amount=+$("s-auto_feather_percent").value;$("au
 $("s-auto_feather").onchange=syncAutoFeather;$("s-auto_feather_percent").oninput=syncAutoFeather;
 function syncFiboOptions(){const full=$("s-fibo_context_mode").value==="full",amount=+$("s-fibo_context_percent").value;$("fibo-mode-help").textContent=$("s-fibo_edit_mode").value==="preserve"?"Starts from the original pixels and limits regeneration to the selection, retaining more of the existing structure. Some details may still change.":"Rebuild the selected content using its surroundings. Original details inside may be replaced.";$("s-fibo_context_percent").disabled=full;$("fibo-context-value").textContent=amount+"%";$("fibo-context-help").textContent=full?"Use the full image as context. Small selections may lose fine detail at the model's working resolution.":`Include a margin on each side equal to ${amount}% of the selection's larger dimension. The editable area stays the same.`;$("s-fibo_boundary_strength").disabled=!$("s-fibo_boundary_match").checked;$("fibo-boundary-value").textContent=$("s-fibo_boundary_strength").value+"%"}
 $("s-fibo_edit_mode").onchange=syncFiboOptions;$("s-fibo_context_mode").onchange=syncFiboOptions;$("s-fibo_context_percent").oninput=syncFiboOptions;$("s-fibo_boundary_match").onchange=syncFiboOptions;$("s-fibo_boundary_strength").oninput=syncFiboOptions;
-async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}syncAutoFeather();syncFiboOptions()}
+async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el||generationDirty.has(el.id))continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}syncAutoFeather();syncFiboOptions()}
 function settingsNote(t,kind,id="check-out"){const n=$(id);n.hidden=!t;n.textContent=t;n.className="note "+(kind||"dim")}
-$("save-settings").onclick=async()=>{const b={};document.querySelectorAll("#sec-generation [id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(["number","range"].includes(el.type)?+el.value:el.value)});
-  try{await post("/api/settings",b);settingsNote("Settings saved.","ok","gen-out")}catch(e){settingsNote(e.message,"bad","gen-out")}};
 $("check").onclick=async()=>{settingsNote(remoteFibo?"Checking the selected ComfyUI source...":"Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
 $("stop").onclick=async()=>{const r=await post("/api/backend/stop");settingsNote(r.message,"dim")};
 $("logs").onclick=()=>post("/api/logs");

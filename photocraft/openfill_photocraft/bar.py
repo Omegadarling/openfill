@@ -1098,8 +1098,14 @@ class Bar:
     def generate(self) -> None:
         if self.service.busy() or self.go.disabled:
             return
+        generation_options = self.settings_view.generation_options()
+        if generation_options is None:
+            self.select_view("generation")
+            return
         kind, prompt = self.tab.get(), self.prompt.get().strip()
         body: dict[str, Any] = {"variations": self.variations.get(), "seed": -1, "model": self._model()}
+        if generation_options:
+            body["generation_settings"] = generation_options
         try:
             if kind in ("fill", "remove"):
                 if not (self.watcher.snapshot().get("selection")):
@@ -1146,6 +1152,7 @@ class Bar:
         except Exception as err:  # noqa: BLE001
             self._say(str(err), BAD)
             return
+        self.settings_view.generation_submitted()
         self._say("")
         self._thumbs_for = ()
         self._remember(prompt)

@@ -3,9 +3,11 @@ import base64
 import io
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
@@ -13,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")]
 
 from openfill_photocraft.references import ReferenceImages  # noqa: E402
+from openfill_photocraft.service import JobState, Service  # noqa: E402
 from openfill_photocraft.web import Api  # noqa: E402
 
 from openfill.config import PANEL_SECTIONS, Settings  # noqa: E402
@@ -81,3 +84,56 @@ class PanelPreferenceTests(unittest.TestCase):
             self.service.references.add_files([good, bad])
         self.assertEqual(self.service.references.rows(), [])
         self.assertEqual(self.service.references.add_files([good])[0]["width"], 12)
+
+    def service_with_job(self):
+        service = Service.__new__(Service)
+        service.app = self.app
+        service.state = JobState()
+        service._operation_lock = threading.Lock()
+        service._thread = None
+        service._job = Mock()
+        return service
+
+    def test_next_job_uses_and_persists_pending_generation_values(self):
+        service = self.service_with_job()
+        observed = []
+        service._job.side_effect = lambda *_: observed.append(self.app.settings.auto_feather_percent)
+        Api(service).post(
+            "/api/fill",
+            {
+                "prompt": "edit",
+                "generation_settings": {"auto_feather": False, "auto_feather_percent": 38},
+            },
+        )
+        service._thread.join(3)
+        self.assertFalse(service._thread.is_alive())
+        self.assertEqual(observed, [38])
+        service._job.assert_called_once_with("fill", {"prompt": "edit", "_reference_images": ()})
+        saved = Settings.load(self.path)
+        self.assertFalse(saved.auto_feather)
+        self.assertEqual(saved.auto_feather_percent, 38)
+        self.assertEqual(saved.active_model, "qwen")
+
+    def test_generation_values_are_rejected_before_start_or_during_active_job(self):
+        service = self.service_with_job()
+        for invalid in ({"comfy_dir": "another server"}, {"auto_feather_percent": float("nan")}):
+            with self.assertRaises(ValueError):
+                service.start("fill", {"prompt": "edit", "generation_settings": invalid})
+        service._thread = Mock()
+        service._thread.is_alive.return_value = True
+        with self.assertRaisesRegex(RuntimeError, "job is already running"):
+            service.start("fill", {"prompt": "edit", "generation_settings": {"auto_feather": False}})
+        self.assertTrue(self.app.settings.auto_feather)
+        self.assertFalse(self.path.exists())
+        service._job.assert_not_called()
+
+    def test_generation_write_failure_restores_previous_values(self):
+        service = self.service_with_job()
+        with (
+            patch.object(self.app.settings, "save", side_effect=OSError("write failed")),
+            self.assertRaisesRegex(OSError, "write failed"),
+        ):
+            service.start("fill", {"prompt": "edit", "generation_settings": {"auto_feather": False}})
+        self.assertTrue(self.app.settings.auto_feather)
+        self.assertEqual(service.state.state, "idle")
+        service._job.assert_not_called()

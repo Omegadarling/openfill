@@ -239,14 +239,12 @@ class SettingsViews:
         for view in (self.models, self.engine, self.generation):
             view.pack(fill="x")
         if not bar.service.app.settings.remote_fibo:
-            ui.Button(bodies["engine"], "Save engine settings", lambda: self.save("engine"), "accent").pack(
+            ui.Button(bodies["engine"], "Save engine settings", self.save_engine, "accent").pack(
                 anchor="w", pady=(10, 0)
             )
-        self.generation_save = ui.Button(
-            bodies["generation"], "Save generation settings", lambda: self.save("generation"), "accent"
-        )
-        self.generation_save.pack(anchor="w", pady=(10, 0))
         self.load()
+        self._generation_dirty: set[str] = set()
+        self.generation.watch_changes(self._generation_dirty.add)
 
     def update_view(self, facts: dict[str, Any]) -> None:
         """Keep the models list current, shown or not, so opening it shows it at once."""
@@ -266,7 +264,7 @@ class SettingsViews:
         self.generation.load_auto_feather(settings)
         self.generation.load_fibo(settings)
 
-    def values(self, section: str) -> dict[str, Any]:
+    def values(self, section: str, only: set[str] | None = None) -> dict[str, Any]:
         if section == "engine":
             raw = {
                 "autostart": self.engine.autostart.get(),
@@ -279,7 +277,7 @@ class SettingsViews:
             raw.update(self.generation.fibo_values())
         out = {}
         for key, label, kind in SETTINGS:
-            if key not in raw:
+            if key not in raw or (only is not None and key not in only):
                 continue
             try:
                 out[key] = kind(raw[key]) if kind is not bool else bool(raw[key])
@@ -291,27 +289,35 @@ class SettingsViews:
             out["auto_feather_percent"] = max(0.0, min(100.0, out["auto_feather_percent"]))
         return validate_fibo_settings(out)
 
-    def save(self, section: str) -> None:
+    def save_engine(self) -> None:
         app = self.bar.service.app
-        view = self.engine if section == "engine" else self.generation
         try:
-            values = self.values(section)
-        except ValueError as err:
-            view.say(str(err), BAD)
-            return
-        try:
-            if section == "engine":
-                folder = self.engine.folder.get().strip()
-                if folder != (app.settings.comfy_dir or ""):
-                    app.use_comfy_dir(folder)
-                    self.bar.service.rescan_models()
-                    self.bar.service.warm_up()
+            values = self.values("engine")
+            folder = self.engine.folder.get().strip()
+            if folder != (app.settings.comfy_dir or ""):
+                app.use_comfy_dir(folder)
+                self.bar.service.rescan_models()
+                self.bar.service.warm_up()
             self.bar.api.post("/api/settings", values)
         except Exception as err:  # noqa: BLE001 - says what is wrong
-            view.say(str(err), BAD)
+            self.engine.say(str(err), BAD)
             return
         self.bar.refresher.wake.set()
-        view.say("Settings saved.", OK)
+        self.engine.say("Settings saved.", OK)
+
+    def generation_options(self) -> dict[str, Any] | None:
+        """Validate the changes to include in the next job request."""
+        if not self._generation_dirty:
+            return {}
+        try:
+            return self.values("generation", self._generation_dirty)
+        except ValueError as err:
+            self.generation.say(str(err), BAD)
+            return None
+
+    def generation_submitted(self) -> None:
+        self._generation_dirty.clear()
+        self.generation.say("")
 
 
 class ReferenceView(tk.Frame):
@@ -892,6 +898,33 @@ class GenerationView(tk.Frame):
         self.auto_feather_percent.trace_add("write", self._sync_auto_feather)
         self.load_auto_feather(bar.service.app.settings)
         self._build_fibo(bar.service.app.settings)
+        self.apply_note = ui.small(self, "Applies when you generate.")
+        self.apply_note.pack(fill="x", pady=(10, 0))
+
+    def watch_changes(self, changed) -> None:
+        """Observe control edits after the stored settings have been loaded."""
+        # Keep these variables alive along with the Field widgets they back.
+        self._field_vars = {}
+        for key, field in self.fields.items():
+            var = tk.StringVar(field.entry, field.get())
+            self._field_vars[key] = var
+            field.entry.configure(textvariable=var)
+            var.trace_add("write", lambda *_args, field_key=key: changed(field_key))
+        for key, var in (
+            ("auto_feather", self.auto_feather.var),
+            ("auto_feather_percent", self.auto_feather_percent),
+            ("fibo_context_percent", self.fibo_context_percent),
+            ("fibo_boundary_match", self.fibo_boundary_match.var),
+            ("fibo_boundary_strength", self.fibo_boundary_strength),
+        ):
+            var.trace_add("write", lambda *_args, field_key=key: changed(field_key))
+
+        def pick(key: str) -> None:
+            self._sync_fibo()
+            changed(key)
+
+        self.fibo_edit_mode.command = lambda _value: pick("fibo_edit_mode")
+        self.fibo_context_mode.command = lambda _value: pick("fibo_context_mode")
 
     def _build_fibo(self, settings) -> None:
         self.fibo_box = box = ui.frame(self)

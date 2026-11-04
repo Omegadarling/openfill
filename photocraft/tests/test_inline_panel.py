@@ -176,6 +176,33 @@ class InlinePanelTests(unittest.TestCase):
         bar.references._remove(bar.references.rows[0]["id"])
         self.assertEqual([r["name"] for r in bar.references.rows], ["first.png"])
 
+    def test_generate_and_prompt_enter_submit_latest_controls(self):
+        bar = self.bar
+        view = bar.settings_view.generation
+        bar.prompt.set("Make the object blue.")
+        view.fibo_edit_mode.pick("Replace selected content")
+        view.auto_feather_percent.set(28)
+        # Polling can refresh backend status while the settings are still staged.
+        bar._update()
+        self.service.start.assert_not_called()
+        bar.go.invoke()
+        self.assertEqual(
+            self.service.start.call_args.args[1]["generation_settings"],
+            {
+                "fibo_edit_mode": "replace",
+                "auto_feather_percent": 28,
+            },
+        )
+        self.assertEqual(bar.settings_view.generation_options(), {})
+        view.fibo_boundary_strength.set(72)
+        self.service.start.side_effect = RuntimeError("Connection check in progress")
+        bar.prompt.on_submit()  # PromptBox binds both Return keys to this callback.
+        self.assertEqual(bar.settings_view.generation_options(), {"fibo_boundary_strength": 72})
+        self.service.start.side_effect = None
+        bar.prompt.on_submit()
+        self.assertEqual(self.service.start.call_args.args[1]["generation_settings"], {"fibo_boundary_strength": 72})
+        self.assertEqual(bar.settings_view.generation_options(), {})
+
 
 if __name__ == "__main__":
     unittest.main()

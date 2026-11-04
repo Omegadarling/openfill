@@ -19,6 +19,7 @@ from typing import Any
 
 from openfill.app import App, NothingSelected
 from openfill.backend import GenerationCancelled, describe_error
+from openfill.config import validate_generation_settings
 from openfill.progress import parse_preview_frame
 from openfill.supervisor import process_name
 
@@ -316,6 +317,19 @@ class Service:
             raise ValueError("Reference images are available for prompted edits.")
         # Freeze the image bytes and their order before the background worker starts.
         params = dict(params, _reference_images=self.references.snapshot() if use_references else ())
+        if "generation_settings" in params:
+            values = validate_generation_settings(params.pop("generation_settings"))
+            settings = self.app.settings
+            previous = {key: getattr(settings, key) for key in values if getattr(settings, key) != values[key]}
+            if previous:
+                for key in previous:
+                    setattr(settings, key, values[key])
+                try:
+                    settings.save(self.app.paths.config)
+                except OSError:
+                    for key, value in previous.items():
+                        setattr(settings, key, value)
+                    raise
         with self.state.lock:
             self.state.state, self.state.kind, self.state.message, self.state.text = "running", kind, "", "Starting..."
             self.state.title = {
