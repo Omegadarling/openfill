@@ -20,6 +20,8 @@ This fork extends [Beckett Harriman’s OpenFill](https://github.com/beckettharr
 
 - **Image Edit** with full Qwen Image 2.1 BF16, four-step Qwen Image 2.1 Lightning v2 RL, and compatible FIBO 2.0 Edit Turbo and Dev NVFP4 checkpoints on an existing ComfyUI server.
 - **Multiple reference images** for Qwen 2.1 and FIBO 2.0. Add and reorder references, then use their labels in the prompt. Drag image files in from Explorer on Windows or drop them into the browser panel.
+- **Automatic feathering** softens the mask inward so an edit blends into the original along the selection edge.
+- **FIBO 2.0 context controls** give the model either the full image or an adjustable crop around the selection. The selection still controls where the edit appears. Optional boundary color matching helps blend it into the original.
 - **One rearrangeable panel.** Expand or collapse sections for editing, references, models, engine settings, and generation. Drag the section grips to reorder them. OpenFill remembers your layout and which models you show in the dropdown. Generation changes apply to the next accepted job and are saved for later.
 - **Compare more variations.** Click **Generate** again in Image Edit or Fill on the same document to add to the choices already shown. **Keep**, **Keep all**, and **Discard** sit below the thumbnails.
 
@@ -36,7 +38,15 @@ Results always go on new layers, in one undo step, so your existing layers are n
 
 ## Where generation runs
 
-The standard managed engine runs ComfyUI locally. **Image Edit** uses the existing ComfyUI server you configure. The public build starts with a loopback connection to `127.0.0.1:8188`. If you forward that port to another machine, your image, selection, prompt and attached references go to that server for processing. [Setup and model files](photocraft/README.md#edit-with-an-existing-comfyui) · [Security notes](docs/security.md)
+The managed engine runs ComfyUI locally for Fill, Remove, Expand, and Create. **Image Edit** connects to a ComfyUI server you run yourself, either on the PhotoCraft computer or on another computer on your LAN.
+
+For a LAN server, start ComfyUI on that computer and run this in a terminal on the PhotoCraft computer. Replace `your-user` and `192.168.1.50` with your SSH username and the ComfyUI computer’s LAN address.
+
+```sh
+ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8188:127.0.0.1:8188 your-user@192.168.1.50
+```
+
+Leave the tunnel open. Enable existing-server mode and choose **Local ComfyUI** in OpenFill. It connects through `127.0.0.1:8188`, and the tunnel carries the edit to the other computer. [LAN setup and connection checks](photocraft/README.md#connect-to-comfyui-on-your-lan) · [Existing-server settings](photocraft/README.md#edit-with-an-existing-comfyui)
 
 ## Install
 
@@ -48,7 +58,14 @@ Install on Windows 10 or 11, Linux, or Apple Silicon macOS. For the standard too
 
 ## Models
 
-OpenFill doesn't ship a model. The model manager only recommends models that fit your graphics memory and disk, and also finds your own SD 1.5 inpainting, SDXL and FLUX.1 Fill files (`.safetensors` and `.gguf`) in ComfyUI's folders.
+Install models on the computer running ComfyUI. The two engine modes support different workflows.
+
+| Engine | Models |
+| --- | --- |
+| **Existing ComfyUI** for Image Edit | Qwen Image 2.1 Full BF16 and four-step Lightning v2 RL. FIBO 2.0 Edit Turbo and Dev Edit NVFP4. Existing-server SDXL editing requires a verified checkpoint entry. The public install ships with an empty SDXL registry for this mode. |
+| **Managed ComfyUI** for Fill, Remove, Expand, and Create | SDXL (including RealVisXL V5 and Juggernaut XL v9), SD 1.5 inpainting (including DreamShaper 8), FLUX.1 Fill, Qwen Image Edit 2511 GGUF, and removal models such as LaMa, MAT, and RORem. Available tools depend on the model. |
+
+[Existing-server model files](photocraft/README.md#existing-server-models) · [Managed model catalog](photocraft/README.md#managed-engine-models)
 
 | Job | Default model | Graphics memory | Time (RTX 4070 Laptop) |
 |---|---|---|---|

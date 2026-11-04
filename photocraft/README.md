@@ -8,7 +8,7 @@ The standard tools share the engine from [upstream OpenFill](https://github.com/
 
 ## Edit with an existing ComfyUI
 
-1. Set up the model files below in a running ComfyUI that answers at `http://127.0.0.1:8188`.
+1. Install the [compatible model files](#existing-server-models) on the computer running ComfyUI. For the same computer as PhotoCraft, start ComfyUI on `127.0.0.1:8188`. For another computer, [open an SSH tunnel](#connect-to-comfyui-on-your-lan) before launching OpenFill.
 2. Open **PhotoCraft with OpenFill** once to create the profile, then close it. In the profile’s `openfill/config.json`, set `"remote_fibo": true` and `"fibo_source": "local"`, keeping the other settings. If the file is missing, create the `openfill` folder inside the profile and save this as `config.json`. See [Good to know](#good-to-know) for the profile location.
 
    ```json
@@ -18,9 +18,28 @@ The standard tools share the engine from [upstream OpenFill](https://github.com/
    }
    ```
 
-3. Reopen **PhotoCraft with OpenFill**, select the area to edit, and choose a model in **Image Edit**. Use **Select All** for a whole-image edit. If no model appears, use **Engine → Check** and confirm that ComfyUI can see all required files and nodes.
+3. Reopen **PhotoCraft with OpenFill**. In **Engine**, use **Local ComfyUI** and press **Check**. This source uses `127.0.0.1:8188` for both a local server and a tunnel. Select the area to edit and choose a model in **Image Edit**. Use **Select All** when you want the edit to cover the whole image.
 
-Existing-server mode discovers compatible model files and nodes from ComfyUI. Install those weights on the server yourself. The public build lists **Local ComfyUI** as its only backend source. A manually started SSH tunnel can forward the same loopback port to a remote ComfyUI. If you maintain a custom build with additional named backends, register them in [`gimp-openfill/openfill/sources.py`](https://github.com/Omegadarling/openfill/blob/main/gimp-openfill/openfill/sources.py) and set `fibo_source` to the registered ID. The models in the standard **Manage Models** catalog belong to the managed engine. To return to that engine and its Fill, Remove, Expand, and Create modes, set `"remote_fibo": false` while the companion is closed.
+If the connection succeeds and your model is missing, check that the server sees the required files and nodes and that the model is enabled in **Manage Models**. To return to the managed engine and its Fill, Remove, Expand, and Create modes, set `"remote_fibo": false` while the companion is closed.
+
+### Connect to ComfyUI on your LAN
+
+1. On the ComfyUI computer, start ComfyUI on `127.0.0.1:8188`. That computer needs a running SSH server that accepts your login and allows local port forwarding. Keep ComfyUI bound to loopback.
+2. On the **PhotoCraft computer**, open a terminal and run the command below. Replace `your-user` with your SSH account and `192.168.1.50` with the ComfyUI computer’s LAN IP address or hostname. Leave the terminal open while you work.
+
+   ```sh
+   ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8188:127.0.0.1:8188 your-user@192.168.1.50
+   ```
+
+3. On the PhotoCraft computer, open `http://127.0.0.1:8188/system_stats` in a browser. A JSON response confirms that ComfyUI answers through the tunnel. Launch OpenFill with the existing-server settings above, keep **Local ComfyUI** selected, and use **Engine → Check**.
+
+The public build uses local port `8188` for this connection. If another local ComfyUI or tunnel is using it, free that port before opening the new tunnel. If ComfyUI uses a different port on the other computer, change the last `8188` in the `-L` argument. Press Ctrl+C in the SSH terminal to disconnect after your edits finish. The server processes the image data, mask, prompt, and references you send for the job. [OpenSSH port forwarding](https://man.openbsd.org/ssh#L) · [ComfyUI server routes](https://docs.comfy.org/development/comfyui-server/comms_routes)
+
+Custom builds can register additional named backends in [`sources.py`](https://github.com/Omegadarling/openfill/blob/main/gimp-openfill/openfill/sources.py) and use their registered IDs in `fibo_source`.
+
+## Existing-server models
+
+Image Edit discovers the supported Qwen and FIBO checkpoints when their companion weights and nodes are available. Use the [managed model catalog](#managed-engine-models) for the original Fill, Remove, Expand, and Create tools.
 
 ### Qwen Image 2.1
 
@@ -43,7 +62,13 @@ Both Qwen variants return a masked layer and preserve pixels outside the selecti
 
 ### FIBO 2.0
 
-Use a ComfyUI build that exposes `TextEncodeFibo2` and supports the `fibo2` CLIP loader and NVFP4 checkpoints. Put `qwen3vl_4b_bf16.safetensors` in `models/text_encoders` and `flux2-vae.safetensors` in `models/vae`. Put `fibo2_edit_turbo_nvfp4.safetensors`, `fibo2_dev_nvfp4.safetensors`, or both in `models/diffusion_models`. The optional `qwen3_vl_4b_nvfp4_full.safetensors` encoder adds Heretic choices alongside Original in the model dropdown. **Generation** offers Preserve structure, Replace selected content, context, and boundary color matching controls for FIBO. [Encoder and VAE](https://huggingface.co/Comfy-Org/Fibo-2.0) · [Edit Turbo checkpoint](https://huggingface.co/BennyDaBall/Fibo-2.0-edit-turbo-NVFP4) · [Dev checkpoint](https://huggingface.co/BennyDaBall/Fibo-2.0-dev-NVFP4)
+Use a ComfyUI build that exposes `TextEncodeFibo2` and supports the `fibo2` CLIP loader and NVFP4 checkpoints. Put `qwen3vl_4b_bf16.safetensors` in `models/text_encoders` and `flux2-vae.safetensors` in `models/vae`. Put `fibo2_edit_turbo_nvfp4.safetensors`, `fibo2_dev_nvfp4.safetensors`, or both in `models/diffusion_models`. The optional `qwen3_vl_4b_nvfp4_full.safetensors` encoder adds Heretic choices alongside Original in the model dropdown. [Encoder and VAE](https://huggingface.co/Comfy-Org/Fibo-2.0) · [Edit Turbo checkpoint](https://huggingface.co/BennyDaBall/Fibo-2.0-edit-turbo-NVFP4) · [Dev checkpoint](https://huggingface.co/BennyDaBall/Fibo-2.0-dev-NVFP4)
+
+In **Generation**, choose **Surrounding area** to give FIBO an adjustable crop around the selection, or **Full image** when the rest of the scene matters to the edit. The selection controls where PhotoCraft displays the generated layer in either case. Use **Preserve structure** to retain more of the original form, or **Replace selected content** for a larger change. Optional boundary color matching adjusts colors near the selection edge to help the edit blend in.
+
+### SDXL
+
+For SDXL out of the box, use the [managed engine](#managed-engine-models). Image Edit on an existing ComfyUI also supports verified full SDXL checkpoints with 4-channel base or 9-channel inpainting architectures. The public build’s registry starts empty. To add a checkpoint in a custom build, audit the SafeTensors header, verify the sampling workflow, and register the exact ComfyUI loader path and source ID. For the public loopback connection, including a LAN tunnel, the source ID is `local`. SDXL uses prompt and selection editing. Reference attachments are available with Qwen 2.1 and FIBO 2.0. [Registry](https://github.com/Omegadarling/openfill/blob/main/gimp-openfill/openfill/verified_sdxl.json) · [Registry format and validation](https://github.com/Omegadarling/openfill/blob/main/gimp-openfill/openfill/remote_sdxl.py)
 
 ### Reference images and panel layout
 
@@ -52,6 +77,8 @@ Choose a reference-capable model and use **Reference Images** to attach up to 15
 Open **Manage Models** to control which models appear in the main dropdown. Click a section header to expand or collapse it, or drag its grip to move the section. OpenFill saves the section order, collapsed state, and model visibility in your profile.
 
 Changes in **Generation** apply when you click **Generate** or press Enter in the prompt. OpenFill saves those choices once it accepts the job.
+
+**Auto-feather selection** in **Generation** softens the layer mask inward, so the transition blends into the original along the selection edge. Adjust **Auto-feather area (%)** to control the amount. Pixels outside the selection stay untouched.
 
 <img src="https://raw.githubusercontent.com/Omegadarling/openfill/main/docs/screenshots/photocraft-demo.gif" width="720" alt="The OpenFill fork shows a reference-guided teapot edit, result review controls, and model visibility settings in its rearrangeable panel.">
 
@@ -139,7 +166,7 @@ Select an area in PhotoCraft (Marquee, Lasso, Object Selection), then type what 
 
 | Mode | What it does |
 |---|---|
-| Image Edit | Edits the selected region using a compatible Qwen 2.1 or FIBO 2.0 model on an existing ComfyUI. Add reference images when the prompt needs them. |
+| Image Edit | Edits the selected region on an existing ComfyUI. Attach references with Qwen 2.1 or FIBO 2.0, or use a verified SDXL checkpoint for a prompt-based selection edit. |
 | Fill | Fills the selection from your prompt, or from the surroundings with no prompt. Up to 5 variations. |
 | Remove | Erases what you selected and continues the background. LaMa does it at the image's own resolution. The Model menu offers every installed model that can remove. |
 | Expand | Grows the canvas: drag the frame's edges, or pick a ratio (Original adds 25 % on each side; 1:1, 5:4, 4:3, 3:2 and 16:9, landscape or portrait). It paints the new edges. |
@@ -169,7 +196,7 @@ The model manager shows what fits your graphics card. Each model has its own lic
 | FLUX.1 Fill dev (GGUF Q4, GGUF Q6, full) | 10 to 27 GB | Fill, Expand | **FLUX.1 [dev] Non-Commercial License** |
 | Qwen Image Edit 2511 (GGUF Q4) | 21 GB | Fill, Expand | Apache-2.0 |
 
-Your own SD 1.5 inpainting, SDXL and FLUX.1 Fill files in ComfyUI's model folders show up too, marked "your file".
+The managed engine also scans your own model files. Put compatible SD 1.5 inpainting or 4-channel SDXL `.safetensors` checkpoints in `models/checkpoints`. SDXL fill uses the Fooocus inpaint patch. Put compatible FLUX.1 Fill `.safetensors` or `.gguf` weights in `models/diffusion_models` or `models/unet`. Recognized models appear as “your file.”
 
 ## Good to know
 
