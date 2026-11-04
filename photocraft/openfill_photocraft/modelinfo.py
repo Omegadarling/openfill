@@ -40,6 +40,17 @@ def model_detail(row: dict[str, Any], needed_by: str = "") -> str:
     remove; erasers are marked erase-trained), its size, and on an AMD card what may not work there."""
     from openfill.catalog import job_hint
 
+    if row.get("template") == "fibo2_edit":
+        encoder = "Heretic NVFP4 encoder" if str(row.get("id", "")).endswith("-heretic") else "Original BF16 encoder"
+        return f"{encoder} · instruction editing · selected area or whole image"
+    if row.get("template") == "qwen21_edit":
+        profile = ("Lightning v2 RL · four steps" if str(row.get("id", "")).endswith("-lightning-v2-rl")
+                   else "Base BF16 checkpoint · 25 steps")
+        return f"{profile} · instruction editing · selected area or whole image"
+    if row.get("template") == "sdxl_edit":
+        return "SDXL masked editing · describe the desired result · 75% change strength"
+    if row.get("template") == "sdxl_inpaint_edit":
+        return "SDXL native inpainting · describe the desired result"
     what = job_hint(row) or needed_by or "Used by other models"
     return " · ".join(x for x in (what, row.get("size") or "", row.get("amd_note") or "") if x)
 

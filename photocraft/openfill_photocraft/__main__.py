@@ -321,6 +321,17 @@ def main(argv: list[str] | None = None) -> int:
         print("OpenFill is already running; handing over.")
         return hand_over(running, args.files, command)
 
+    from openfill.config import Paths, Settings
+    startup_settings = Settings.load(Paths.for_profile(profile).config)
+    if startup_settings.remote_fibo:
+        from openfill_photocraft.comfy_connection import ensure_connection
+        try:
+            ensure_connection(startup_settings.active_url, profile, source_id=startup_settings.fibo_source)
+        except Exception as err:
+            # Still open the companion so the user can select an available
+            # source or retry Check. Never silently route to another computer.
+            print("Selected FIBO source is unavailable:", err)
+
     token = profile / "control.token"
     read_root = read_root_for(exchange)
     client = ControlClient(args.port, token)

@@ -15,10 +15,12 @@ pre-fill nodes and can apply the Fooocus SDXL inpaint patch.
 
 from __future__ import annotations
 
+import math
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 
-from .backend import InpaintRequest, ModelSpec, Txt2ImgRequest
+from .backend import InpaintRequest, ModelSpec, QWEN21_EDIT_TEMPLATE, Txt2ImgRequest
 
 OUTPUT_NODE = "save"
 
@@ -799,6 +801,348 @@ def build_qwen_edit(
     return _finish(g, req, g.out("decode"), mask, caps, filename_prefix)
 
 
+QWEN21_RESOLUTION = 1024
+QWEN21_LIGHTNING_SIGMAS = "1.0, 0.95418, 0.89508, 0.704534, 0.0"
+
+
+def qwen21_reference_size(width: int, height: int) -> tuple[int, int]:
+    """Match the first image's latent size in native TextEncodeQwenImage21."""
+    if min(width, height) < 1:
+        raise ValueError("Qwen Image 2.1 needs positive image dimensions")
+    ratio = width / height
+    area = QWEN21_RESOLUTION * QWEN21_RESOLUTION
+    return max(32, round(math.sqrt(area * ratio) / 32) * 32), max(32, round(math.sqrt(area / ratio) / 32) * 32)
+
+
+def build_qwen21_edit(
+    req: InpaintRequest,
+    image_ref: str,
+    mask_ref: str,
+    seed: int,
+    caps: Capabilities,
+    filename_prefix: str = "openfill/qwen21-edit",
+) -> dict:
+    """Native Qwen 2.1 instruction editing, clipped to the PhotoCraft selection."""
+    if req.mode != "fill" or not req.prompt.strip():
+        raise ValueError("Write an edit instruction for Qwen Image 2.1")
+    if not all((req.model.unet, req.model.clip1, req.model.vae)):
+        raise ValueError("Qwen Image 2.1 needs its diffusion model, Qwen3-VL encoder, and VAE")
+    width, height = qwen21_reference_size(req.width, req.height)
+    aligned = replace(req, work_width=width, work_height=height, color_match=0.0)
+    g = Graph()
+    g.add("unet", "UNETLoader", unet_name=req.model.unet, weight_dtype="default")
+    g.add("clip", "CLIPLoader", clip_name=req.model.clip1, type="qwen_image", device="default")
+    g.add("vae", "VAELoader", vae_name=req.model.vae)
+    g.add("load_image", "LoadImage", image=image_ref)
+    g.add("load_mask", "LoadImage", image=mask_ref)
+    g.add("selection_mask", "ImageToMask", image=g.out("load_mask"), channel="red")
+    g.add("selection_support", "ThresholdMask", mask=g.out("selection_mask"), value=0.0)
+    g.add("encode", "TextEncodeQwenImage21", clip=g.out("clip"), vae=g.out("vae"),
+          prompt=req.prompt, negative_prompt="", resolution=QWEN21_RESOLUTION,
+          **{"images.image_1": g.out("load_image")})
+    g.add("cache", "QwenImage21Cache", model=g.out("unet"), device="auto", dtype="default")
+    latent = g.out("encode", 2)
+    batch = max(1, int(req.sampling.batch))
+    if batch > 1:
+        g.add("latent_batch", "RepeatLatentBatch", samples=latent, amount=batch)
+        latent = g.out("latent_batch")
+    if req.model.qwen21_lightning:
+        # The publisher's sigmas are already shifted. A four-step standard
+        # scheduler would use different sigmas and change the edit behavior.
+        g.add("guider", "BasicGuider", model=g.out("cache"), conditioning=g.out("encode", 0))
+        g.add("sigmas", "ManualSigmas", sigmas=QWEN21_LIGHTNING_SIGMAS)
+        g.add("sampler_select", "KSamplerSelect", sampler_name="euler")
+        g.add("noise", "RandomNoise", noise_seed=int(seed))
+        g.add("sampler", "SamplerCustomAdvanced", noise=g.out("noise"), guider=g.out("guider"),
+              sampler=g.out("sampler_select"), sigmas=g.out("sigmas"), latent_image=latent)
+    else:
+        g.add("sampler", "KSampler", model=g.out("cache"), positive=g.out("encode", 0), negative=g.out("encode", 1),
+              latent_image=latent, seed=int(seed), steps=int(req.sampling.steps), cfg=1.0,
+              sampler_name="euler", scheduler="simple", denoise=1.0)
+    g.add("decode", "VAEDecode", samples=g.out("sampler"), vae=g.out("vae"))
+    _finish(g, aligned, g.out("decode"), g.out("selection_support"), caps, filename_prefix)
+    generated = g.nodes[OUTPUT_NODE]["inputs"]["images"]
+    destination = g.out("load_image")
+    if batch > 1:
+        g.add("source_batch", "RepeatImageBatch", image=destination, amount=batch)
+        destination = g.out("source_batch")
+    # The graph protects the exterior with hard support. PhotoCraft applies
+    # its captured soft selection once when it adds the result layer.
+    g.add("selection_composite", "ImageCompositeMasked", destination=destination, source=generated,
+          x=0, y=0, resize_source=False, mask=g.out("selection_support"))
+    g.nodes[OUTPUT_NODE]["inputs"]["images"] = g.out("selection_composite")
+    return g.to_dict()
+
+
+SDXL_EDIT_TEMPLATES = ("sdxl_edit", "sdxl_inpaint_edit")
+SELECTION_EDIT_TEMPLATES = ("fibo2_edit", QWEN21_EDIT_TEMPLATE, *SDXL_EDIT_TEMPLATES)
+
+
+def build_sdxl_edit(
+    req: InpaintRequest,
+    image_ref: str,
+    mask_ref: str,
+    seed: int,
+    caps: Capabilities,
+    filename_prefix: str = "openfill/sdxl-edit",
+) -> dict:
+    """Masked SDXL editing using core nodes and the checkpoint's own CLIP/VAE.
+
+    Header-verified regular (four input channels) checkpoints use ordinary
+    image-to-image latents plus a noise mask. Native inpainting checkpoints
+    (nine input channels) additionally need the masked-image conditioning from
+    InpaintModelConditioning. Neither path installs or applies Fooocus patches.
+    A binary support mask controls generation; PhotoCraft applies the original
+    soft selection to the returned layer once, preserving its alpha falloff.
+    """
+    if req.mode != "fill":
+        raise ValueError("This SDXL integration supports selected-region editing; Expand is not enabled")
+    if req.model.arch != "sdxl" or req.model.effective_template not in SDXL_EDIT_TEMPLATES:
+        raise ValueError("SDXL editing requires a verified regular or native inpainting SDXL checkpoint")
+    if not req.model.checkpoint:
+        raise ValueError("Choose an installed SDXL checkpoint for editing")
+    if not req.prompt.strip():
+        raise ValueError("Describe the content you want in the selected area for SDXL")
+    if min(req.width, req.height, req.work_width, req.work_height) < 1:
+        raise ValueError("SDXL editing needs positive image dimensions")
+    if not 0.0 <= float(req.sampling.denoise) <= 1.0:
+        raise ValueError("SDXL edit strength must be between zero and one")
+    width = max(8, ((int(req.work_width) + 7) // 8) * 8)
+    height = max(8, ((int(req.work_height) + 7) // 8) * 8)
+    aligned = replace(req, work_width=width, work_height=height, color_match=0.0)
+    g = Graph()
+    model, clip, vae = _checkpoint(g, req.model.checkpoint)
+    positive, negative = _prompts(g, clip, req.prompt, req.negative or "")
+    g.add("load_image", "LoadImage", image=image_ref)
+    g.add("load_mask", "LoadImage", image=mask_ref)
+    g.add("selection_mask", "ImageToMask", image=g.out("load_mask"), channel="red")
+    g.add("selection_support", "ThresholdMask", mask=g.out("selection_mask"), value=0.0)
+    image, mask = g.out("load_image"), g.out("selection_support")
+    if aligned.needs_scaling:
+        image = _scale_image(g, "image_scale", image, width, height)
+        # Scale the hard support without inventing a second feathered edge.
+        g.add("work_mask_image", "MaskToImage", mask=mask)
+        g.add("work_mask_scale", "ImageScale", image=g.out("work_mask_image"),
+              upscale_method="nearest-exact", width=width, height=height, crop="disabled")
+        g.add("work_mask", "ImageToMask", image=g.out("work_mask_scale"), channel="red")
+        mask = g.out("work_mask")
+    if int(req.grow) > 0:
+        # Give the sampler context around the seam. The final composite and
+        # editor mask still expose only pixels from the original selection.
+        g.add("model_mask_grow", "GrowMask", mask=mask, expand=int(req.grow), tapered_corners=True)
+        mask = g.out("model_mask_grow")
+    if req.model.effective_template == "sdxl_inpaint_edit":
+        g.add("encode", "InpaintModelConditioning", positive=positive, negative=negative,
+              vae=vae, pixels=image, mask=mask, noise_mask=True)
+        positive, negative, latent = g.out("encode", 0), g.out("encode", 1), g.out("encode", 2)
+    else:
+        g.add("encode", "VAEEncode", pixels=image, vae=vae)
+        g.add("noise_mask", "SetLatentNoiseMask", samples=g.out("encode"), mask=mask)
+        latent = g.out("noise_mask")
+    batch = max(1, int(req.sampling.batch))
+    if batch > 1:
+        g.add("batch", "RepeatLatentBatch", samples=latent, amount=batch)
+        latent = g.out("batch")
+    g.add("sampler", "KSampler", model=model, positive=positive, negative=negative,
+          latent_image=latent, seed=int(seed), steps=int(req.sampling.steps), cfg=float(req.sampling.cfg),
+          sampler_name=req.sampling.sampler, scheduler=req.sampling.scheduler,
+          denoise=float(req.sampling.denoise))
+    g.add("decode", "VAEDecode", samples=g.out("sampler"), vae=vae)
+    _finish(g, aligned, g.out("decode"), g.out("selection_support"), caps, filename_prefix)
+    generated = g.nodes[OUTPUT_NODE]["inputs"]["images"]
+    destination = g.out("load_image")
+    if batch > 1:
+        g.add("source_batch", "RepeatImageBatch", image=destination, amount=batch)
+        destination = g.out("source_batch")
+    g.add("selection_composite", "ImageCompositeMasked", destination=destination, source=generated,
+          x=0, y=0, resize_source=False, mask=g.out("selection_support"))
+    g.nodes[OUTPUT_NODE]["inputs"]["images"] = g.out("selection_composite")
+    return g.to_dict()
+
+
+@lru_cache(maxsize=64)
+def fibo_trained_size(source_width: int, source_height: int) -> tuple[int, int]:
+    """Native FIBO reference size, preserving its multi-reference alignment.
+
+    TextEncodeFibo2 independently sizes multiple references to about 1 MP,
+    even when an explicit output size was supplied. Choose that same size
+    before resizing without cropping, so original and selection guide cannot
+    be center-cropped differently from the image we later paste into PhotoCraft.
+    This is the native node's trained_size ordering, including its tie breaks.
+    """
+    if min(source_width, source_height) < 1:
+        raise ValueError("FIBO reference dimensions must be positive")
+    aspect_ratio = source_width / source_height
+    area = 1024 * 1024
+    sizes = (
+        (w, h)
+        for w in range(64, 2 * area // 64, 16)
+        for h in range(
+            max(64, 16 * math.ceil(0.9 * area / w / 16)),
+            16 * math.floor(1.1 * area / w / 16) + 1,
+            16,
+        )
+    )
+    return min(
+        sizes,
+        key=lambda size: (
+            round(1 - min(size[0] / size[1] / aspect_ratio, aspect_ratio * size[1] / size[0]), 9),
+            abs(size[0] * size[1] - area),
+            -size[0],
+        ),
+    )
+
+
+def fibo_edit_prompt(prompt: str, mode: str) -> str:
+    """Add mode-specific guidance while retaining the user's complete edit."""
+    if mode == "preserve":
+        return (
+            prompt.strip()
+            + " Keep the existing structure, surfaces, frames, camera angle and perspective unchanged "
+            "except for the requested edit. Use existing openings in their original positions. "
+            "Size any added subject to fit the relevant opening and surrounding scene."
+        )
+    if mode == "replace":
+        return (
+            "Regenerate the gray selected area in <image_1> with this requested content: "
+            + prompt.strip()
+            + "\nUse the visible surroundings as reference. Match their perspective, scale, lighting, "
+            "materials and texture, continuing surfaces and outlines at the boundary. Keep the unmasked "
+            "surroundings unchanged. Replace the gray area completely; do not leave a gray patch."
+        )
+    raise ValueError("FIBO edit mode must be 'preserve' or 'replace'")
+
+
+def build_fibo2_edit(
+    req: InpaintRequest,
+    image_ref: str,
+    mask_ref: str,
+    seed: int,
+    caps: Capabilities,
+    filename_prefix: str = "openfill/fibo2",
+) -> dict:
+    """Selection-aware FIBO editing with original exterior and one alpha blend.
+
+    Replace uses FIBO's trained grey-region reference preparation and its native
+    empty latent. Preserve is the tested source-latent editing preset: retain
+    the intact reference, encode the same source as the sampler's initial
+    latent, and restrict denoising to selection support at strength 0.75.
+    Both retain native FIBO positive/negative conditioning. The intact source
+    stays separate for compositing; PhotoCraft applies soft alpha exactly once.
+    """
+    if req.mode != "fill":
+        raise ValueError("FIBO 2.0 Edit supports editing a selection or the whole image; Expand is not supported")
+    if not req.prompt.strip():
+        raise ValueError("Write an edit instruction for FIBO 2.0 Edit")
+    if not all((req.model.unet, req.model.clip1, req.model.vae)):
+        raise ValueError("FIBO 2.0 Edit needs its diffusion model, Qwen3-VL text encoder and VAE")
+    if _is_gguf(req.model.unet) or _is_gguf(req.model.clip1):
+        raise ValueError("This FIBO 2.0 Edit integration requires native safetensors models")
+    diffusion_name = req.model.unet.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if diffusion_name not in ("fibo2_edit_turbo_nvfp4.safetensors", "fibo2_dev_nvfp4.safetensors"):
+        raise ValueError("PhotoCraft FIBO 2.0 editing requires the NVFP4 Dev or Edit Turbo diffusion model")
+    if min(req.width, req.height, req.work_width, req.work_height) < 1:
+        raise ValueError("FIBO 2.0 Edit needs positive image dimensions")
+    edit_prompt = fibo_edit_prompt(req.prompt, req.fibo_edit_mode)
+
+    # Multi-reference encoding picks its own trained size. Align to it up front
+    # with no crop; both modes then have the same size for fair comparisons.
+    width, height = fibo_trained_size(req.width, req.height)
+    aligned = replace(req, work_width=width, work_height=height, color_match=0.0)
+    g = Graph()
+    g.add("unet", "UNETLoader", unet_name=req.model.unet, weight_dtype="default")
+    g.add("clip", "CLIPLoader", clip_name=req.model.clip1, type="fibo2")
+    g.add("vae", "VAELoader", vae_name=req.model.vae)
+    g.add("load_image", "LoadImage", image=image_ref)
+    g.add("load_mask", "LoadImage", image=mask_ref)
+    image = g.out("load_image")
+    if aligned.needs_scaling:
+        image = _scale_image(g, "image_scale", image, width, height)
+    g.add("selection_mask", "ImageToMask", image=g.out("load_mask"), channel="red")
+    # The user can feather or select a one-pixel line. Keep every selected pixel
+    # in the guide; thresholding the already feathered mask at 0.5 would erase
+    # thin selections. The resulting model guide support is binary.
+    g.add("selection_support", "ThresholdMask", mask=g.out("selection_mask"), value=0.0)
+    guide_mask = g.out("selection_support")
+    if aligned.needs_scaling:
+        g.add("guide_mask_image", "MaskToImage", mask=guide_mask)
+        g.add("guide_mask_scale", "ImageScale", image=g.out("guide_mask_image"),
+              upscale_method="nearest-exact", width=width, height=height, crop="disabled")
+        g.add("guide_mask", "ImageToMask", image=g.out("guide_mask_scale"), channel="red")
+        guide_mask = g.out("guide_mask")
+    reference = image
+    if req.fibo_edit_mode == "replace":
+        g.add("guide_gray", "EmptyImage", width=width, height=height, batch_size=1, color=0x808080)
+        g.add("selection_guide", "ImageCompositeMasked", destination=image, source=g.out("guide_gray"),
+              x=0, y=0, resize_source=False, mask=guide_mask)
+        reference = g.out("selection_guide")
+    g.add(
+        "encode",
+        "TextEncodeFibo2",
+        clip=g.out("clip"),
+        prompt=edit_prompt,
+        negative_prompt=req.negative or "",
+        vae=g.out("vae"),
+        width=width,
+        height=height,
+        batch_size=max(1, int(req.sampling.batch)),
+        **{"images.image_1": reference},
+    )
+    sampler_latent = g.out("encode", 2)
+    denoise = 1.0
+    if req.fibo_edit_mode == "preserve":
+        # The native FIBO VAE and denoiser share Flux2's 128-channel /16 latent
+        # format. Start from pristine source pixels, never an annotated guide.
+        g.add("original_latent", "VAEEncode", pixels=image, vae=g.out("vae"))
+        sampler_latent = g.out("original_latent")
+        if int(req.sampling.batch) > 1:
+            # TextEncodeFibo2.batch_size only affects its unused empty latent.
+            # Repeat source samples here so each variation gets its own noise
+            # from KSampler's normal batch generation, with no fixed batch index.
+            g.add("latent_batch", "RepeatLatentBatch", samples=sampler_latent, amount=int(req.sampling.batch))
+            sampler_latent = g.out("latent_batch")
+        g.add("latent_mask", "SetLatentNoiseMask", samples=sampler_latent, mask=guide_mask)
+        sampler_latent = g.out("latent_mask")
+        denoise = 0.75
+    g.add(
+        "sampler",
+        "KSampler",
+        model=g.out("unet"),
+        positive=g.out("encode", 0),
+        negative=g.out("encode", 1),
+        latent_image=sampler_latent,
+        seed=int(seed),
+        steps=int(req.sampling.steps),
+        cfg=float(req.sampling.cfg),
+        sampler_name="euler",
+        scheduler="simple",
+        denoise=denoise,
+    )
+    g.add("decode", "VAEDecode", samples=g.out("sampler"), vae=g.out("vae"))
+    # Hard support protects the original exterior. The soft alpha is applied
+    # later by PhotoCraft; blending it here too would square that alpha.
+    _finish(g, aligned, g.out("decode"), g.out("selection_mask"), caps, filename_prefix)
+    generated = g.nodes[OUTPUT_NODE]["inputs"]["images"]
+    destination = g.out("load_image")
+    if int(req.sampling.batch) > 1:
+        # ImageCompositeMasked repeats/truncates its source to the destination
+        # batch size. Repeat the original or all but the first variation vanish.
+        g.add("source_batch", "RepeatImageBatch", image=destination, amount=int(req.sampling.batch))
+        destination = g.out("source_batch")
+    g.add(
+        "selection_composite",
+        "ImageCompositeMasked",
+        destination=destination,
+        source=generated,
+        x=0,
+        y=0,
+        resize_source=False,
+        mask=g.out("selection_support"),
+    )
+    g.nodes[OUTPUT_NODE]["inputs"]["images"] = g.out("selection_composite")
+    return g.to_dict()
+
+
 # The prompts erase-trained models run with (positive, negative). RORem's authors found
 # content-free quality words help; the FLUX Fill removal LoRA needs no prompt.
 ERASER_PROMPTS = {
@@ -989,6 +1333,10 @@ BUILDERS = {
     "sdxl_fooocus": build_inpaint,
     "flux_fill": build_flux_fill,
     "qwen_edit": build_qwen_edit,
+    QWEN21_EDIT_TEMPLATE: build_qwen21_edit,
+    "sdxl_edit": build_sdxl_edit,
+    "sdxl_inpaint_edit": build_sdxl_edit,
+    "fibo2_edit": build_fibo2_edit,
     "inpaint_model": build_removal,
     "sdxl_eraser": build_inpaint,
     "flux_eraser": build_inpaint,
@@ -1019,7 +1367,7 @@ def build_txt2img(req: Txt2ImgRequest, seed: int, filename_prefix: str = "openfi
     g = Graph()
     if req.model.effective_template == "flux_fill":
         raise ValueError("FLUX.1 Fill is an inpainting model; use it for Generative Fill or Expand")
-    if req.model.effective_template in ("qwen_edit", "inpaint_model"):
+    if req.model.effective_template in ("qwen_edit", "inpaint_model", *SELECTION_EDIT_TEMPLATES):
         raise ValueError("the active model does not support text to image")
     model, clip, vae = _checkpoint(g, req.model.checkpoint)
     positive, negative = _prompts(g, clip, req.prompt, req.negative)
@@ -1051,9 +1399,16 @@ def build_txt2img(req: Txt2ImgRequest, seed: int, filename_prefix: str = "openfi
 
 def total_steps(graph: dict) -> int:
     """Sum of sampler steps in a graph (for progress estimation)."""
-    return sum(
-        int(n["inputs"].get("steps", 0)) for n in graph.values() if n["class_type"] in ("KSampler", "KSamplerAdvanced")
-    )
+    steps = 0
+    for node in graph.values():
+        if node["class_type"] in ("KSampler", "KSamplerAdvanced"):
+            steps += int(node["inputs"].get("steps", 0))
+        elif node["class_type"] == "SamplerCustomAdvanced":
+            link = node["inputs"].get("sigmas")
+            sigmas = graph.get(link[0], {}) if link else {}
+            if sigmas.get("class_type") == "ManualSigmas":
+                steps += len(sigmas["inputs"]["sigmas"].split(",")) - 1
+    return steps
 
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"

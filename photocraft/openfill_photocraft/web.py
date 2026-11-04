@@ -9,6 +9,7 @@ another local program cannot drive PhotoCraft through it.
 from __future__ import annotations
 
 import json
+import math
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 from openfill import catalog as cat
 from openfill.backend import describe_error
+from openfill.config import validate_fibo_settings
 
 from . import __version__
 from .service import Service
@@ -34,6 +36,13 @@ EDITABLE = {
     "cfg": float,
     "grow_percent": float,
     "feather_percent": float,
+    "auto_feather": bool,
+    "auto_feather_percent": float,
+    "fibo_edit_mode": str,
+    "fibo_context_mode": str,
+    "fibo_context_percent": float,
+    "fibo_boundary_match": bool,
+    "fibo_boundary_strength": float,
     "debug": bool,
 }
 
@@ -57,6 +66,10 @@ class Api:
             "job": self.service.state.snapshot(),
             "photocraft": self.service.photocraft(),
             "busy": self.service.busy(),
+            "remoteFibo": app.settings.remote_fibo,
+            "backendUrl": app.settings.url if app.settings.remote_fibo else "",
+            "backendSource": app.settings.fibo_source if app.settings.remote_fibo else "",
+            "backendName": app.source_label() if app.settings.remote_fibo else "",
             "activeModel": app.active_model_id(),
             "comfyReady": _comfy_set(app),
             "comfyProblem": "" if _comfy_set(app) else _comfy_problem(app),
@@ -66,10 +79,11 @@ class Api:
 
     def models(self) -> dict[str, Any]:
         app = self.service.app
+        source_id = app.settings.fibo_source if app.settings.remote_fibo else ""
         try:
             rows = app.model_rows(app.server_model_files())
         except Exception as err:  # noqa: BLE001
-            return {"rows": [], "error": describe_error(err)}
+            return {"rows": [], "error": describe_error(err), "source": source_id}
         status = app.task_status()
         current = status.get("current") or {}
         pending = [t.get("model_id") for t in app.server.pending_tasks()]
@@ -79,6 +93,12 @@ class Api:
             row["statusText"] = cat.row_status(row, current, pending)
             if not row["runnable"]:
                 row["neededBy"] = needed_by(list(app.catalog), row["id"])
+        if app.settings.remote_fibo:
+            from openfill.sources import get_source
+            if source_id != app.settings.fibo_source:
+                rows, source_id = [], app.settings.fibo_source
+            return {"rows": rows, "current": current, "pending": pending, "source": source_id,
+                    "hardware": f"{get_source(source_id).label} · ComfyUI"}
         hw = None
         try:
             from openfill import hardware
@@ -110,6 +130,12 @@ class Api:
     def settings(self) -> dict[str, Any]:
         s = self.service.app.settings
         return {k: getattr(s, k) for k in EDITABLE}
+
+    def sources(self) -> dict[str, Any]:
+        from openfill.sources import list_sources
+        selected = self.service.app.settings.fibo_source
+        return {"selected": selected, "sources": [dict(item, name=item["label"], selected=item["id"] == selected)
+                                                    for item in list_sources()]}
 
     # POST -----------------------------------------------------------------------------
 
@@ -148,17 +174,31 @@ class Api:
             app.save_token(str(body.get("token", "")))
             return {"ok": True}
         if path == "/api/settings":
-            for key, kind in EDITABLE.items():
-                if key in body:
-                    setattr(app.settings, key, kind(body[key]))
+            # Validate before changing settings so a rejected amount cannot
+            # partially save the toggle or other form values.
+            if "fibo_boundary_match" in body and not isinstance(body["fibo_boundary_match"], bool):
+                raise ValueError("Boundary color matching must be on or off.")
+            values = {key: kind(body[key]) for key, kind in EDITABLE.items() if key in body}
+            values = validate_fibo_settings(values)
+            if "auto_feather_percent" in values:
+                amount = values["auto_feather_percent"]
+                if not math.isfinite(amount):
+                    raise ValueError("Auto-feather area must be a finite percentage.")
+                values["auto_feather_percent"] = max(0.0, min(100.0, amount))
+            for key, value in values.items():
+                setattr(app.settings, key, value)
+            if app.settings.remote_fibo:
+                app.settings.autostart = False
             app.settings.save(app.paths.config)
             app.reload_settings()
             return self.settings()
         if path == "/api/comfy/setup":
             return {"task": svc.setup_comfy()}
         if path == "/api/backend/check":
-            health = app.check_backend()
+            health = svc.check_backend()
             return {"ok": health.ok, "detail": health.detail, "device": getattr(health, "device", "")}
+        if path == "/api/backend/source":
+            return svc.select_source(str(body["source"]))
         if path == "/api/backend/stop":
             return {"message": app.stop_backend()}
         if path == "/api/logs":
@@ -171,12 +211,14 @@ def _comfy_set(app) -> bool:
     """A ComfyUI folder OpenFill can use (models and nodes live there), not just a server answering."""
     from openfill.config import comfy_layout
 
-    return comfy_layout(app.settings.comfy_dir) is not None
+    return app.comfy_ready() if app.settings.remote_fibo else comfy_layout(app.settings.comfy_dir) is not None
 
 
 def _comfy_problem(app) -> str:
     from openfill.config import comfy_problem
 
+    if app.settings.remote_fibo:
+        return app.remote_models.error or f"Start ComfyUI on {app.source_label()}, then press Check."
     return comfy_problem(app.settings.comfy_dir) or "ComfyUI is not set up."
 
 
@@ -219,6 +261,8 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
                     self._json(200, api.state())
                 elif path == "/api/models":
                     self._json(200, api.models())
+                elif path == "/api/sources":
+                    self._json(200, api.sources())
                 elif path == "/api/settings":
                     self._json(200, api.settings())
                 elif path == "/api/comfy/preflight":  # what Download ComfyUI would fetch (read-only)

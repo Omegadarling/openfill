@@ -109,6 +109,8 @@ class ServerManager:
 
     def read_state(self) -> dict[str, Any]:
         """``server-state.json`` as written by the supervisor; ``{}`` when absent or broken."""
+        if self.settings.remote_fibo:
+            return {}
         try:
             return json.loads(self.paths.state.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -121,6 +123,8 @@ class ServerManager:
 
     def touch(self) -> None:
         """Record activity so the idle timeout restarts."""
+        if self.settings.remote_fibo:
+            return
         state = self.read_state()
         if state:
             self.register_watcher()
@@ -133,6 +137,8 @@ class ServerManager:
     def register_watcher(self, gimp_pid: int | None = None) -> None:
         """Tell the supervisor that this GIMP uses the managed backend too, so it is not shut down
         when the GIMP that started it exits while this one still needs it."""
+        if self.settings.remote_fibo:
+            return
         try:
             folder = self.paths.base / WATCHERS_DIRNAME
             folder.mkdir(parents=True, exist_ok=True)
@@ -145,6 +151,8 @@ class ServerManager:
 
     def request_stop(self) -> bool:
         """Ask the supervisor to shut the backend down. Returns True if asked."""
+        if self.settings.remote_fibo:
+            return False
         state = self.read_state()
         if not state:
             return False
@@ -161,6 +169,8 @@ class ServerManager:
 
     def url(self) -> str:
         """URL of the running managed backend, else the configured one."""
+        if self.settings.remote_fibo:
+            return self.settings.active_url
         state = self.read_state()
         return state.get("url") or self.settings.active_url
 
@@ -180,6 +190,13 @@ class ServerManager:
         if self.is_healthy(url):
             self.touch()
             return url
+        if self.settings.remote_fibo:
+            from .sources import get_source
+
+            label = get_source(self.settings.fibo_source).label
+            raise BackendUnavailable(
+                f"{label} is not answering at {url}. Start ComfyUI on {label}, then use Engine > Check."
+            )
         if self.settings.backend == "a1111":
             raise BackendUnavailable(
                 f"AUTOMATIC1111 WebUI is not answering at {self.settings.a1111_url}. "
@@ -194,6 +211,10 @@ class ServerManager:
 
     def start(self, progress: ProgressCallback | None = None, cancel: Callable[[], bool] | None = None) -> str:
         """Launch the backend supervisor detached and wait until ComfyUI answers."""
+        if self.settings.remote_fibo:
+            from .sources import get_source
+
+            raise BackendUnavailable(f"ComfyUI is managed separately on {get_source(self.settings.fibo_source).label}.")
         layout = comfy_layout(self.settings.comfy_dir)
         if layout is None:
             raise BackendUnavailable(
@@ -316,6 +337,8 @@ class ServerManager:
 
     def request_cancel(self) -> None:
         """Cancel the running task and drop everything still queued."""
+        if self.settings.remote_fibo:
+            return
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
         (self.tasks_dir / "cancel").write_text(str(time.time()), encoding="utf-8")
         # also drop anything still waiting in the queue

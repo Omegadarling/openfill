@@ -9,6 +9,7 @@ No GIMP imports: the caller passes the profile directory.
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import sys
@@ -30,6 +31,30 @@ MODELS_CACHE_FILENAME = "models-cache.json"
 HUB_CACHE_FILENAME = "hub-cache.json"
 HUB_SELECTED_FILENAME = "hub-selected.json"
 
+FIBO_EDIT_MODES = {"preserve": "Preserve structure", "replace": "Replace selected content"}
+FIBO_CONTEXT_MODES = {"local": "Surrounding area", "full": "Full image"}
+FIBO_PERCENT_RANGES = {
+    "fibo_context_percent": (25.0, 200.0, 100.0, "Surrounding context"),
+    "fibo_boundary_strength": (0.0, 100.0, 50.0, "Boundary color matching"),
+}
+
+
+def validate_fibo_settings(values: dict[str, Any]) -> dict[str, Any]:
+    """Validate a partial settings form before any settings are changed."""
+    result = dict(values)
+    for key, choices in (("fibo_edit_mode", FIBO_EDIT_MODES), ("fibo_context_mode", FIBO_CONTEXT_MODES)):
+        if key in result and result[key] not in choices:
+            raise ValueError(f"{key}: choose one of {', '.join(choices.values())}.")
+    for key, (low, high, _default, label) in FIBO_PERCENT_RANGES.items():
+        if key in result:
+            amount = float(result[key])
+            if not math.isfinite(amount):
+                raise ValueError(f"{label} must be a finite percentage.")
+            result[key] = max(low, min(high, amount))
+    if "fibo_boundary_match" in result and not isinstance(result["fibo_boundary_match"], bool):
+        raise ValueError("Boundary color matching must be on or off.")
+    return result
+
 
 def default_comfy_dir() -> str:
     """The ComfyUI folder assumed when the config does not name one."""
@@ -49,6 +74,8 @@ class Settings:
     """
 
     backend: str = "comfyui"  # "comfyui" or "a1111"
+    remote_fibo: bool = False  # existing remote ComfyUI, including SSH loopback tunnels
+    fibo_source: str = "local"  # fixed backend in sources.py; no fallback to another host
     comfy_dir: str = field(default_factory=default_comfy_dir)
     url: str = "http://127.0.0.1:8188"  # ComfyUI (or A1111) base URL
     a1111_url: str = "http://127.0.0.1:7860"
@@ -72,6 +99,13 @@ class Settings:
     feather: int = 24  # layer mask feather cap (px); actual = feather_percent
     grow_percent: float = 15.0  # dilation as percent of the selection's larger side (covers object rims)
     feather_percent: float = 6.0  # layer mask feather as percent of the larger side
+    auto_feather: bool = True  # PhotoCraft edit selection: soften its inner edge
+    auto_feather_percent: float = 10.0  # outer percentage of alpha-selected area
+    fibo_edit_mode: str = "preserve"  # preserve original structure or replace selected content
+    fibo_context_mode: str = "local"  # surrounding crop or full image
+    fibo_context_percent: float = 100.0  # per-side padding as % of selection's larger dimension
+    fibo_boundary_match: bool = True  # match colors at selection edges; does not realign shapes
+    fibo_boundary_strength: float = 50.0  # 0-100% boundary color correction strength
     prefill: bool = True
     # Second pass at full resolution over the regenerated area when the fill
     # was worked below 1:1 (SD 1.5 and SDXL tiers), at this denoise. Off: in
@@ -159,6 +193,22 @@ class Settings:
                     setattr(settings, key, _coerce(getattr(settings, key), value))
                 except (TypeError, ValueError):
                     pass
+        if settings.remote_fibo:
+            # Preserve the selected variant when upgrading the PhotoCraft catalog.
+            # Loading is still read-only; the caller persists on its next save.
+            settings.active_model = {
+                "remote-fibo2-edit-turbo-bf16": "remote-fibo2-edit-turbo-nvfp4",
+                "remote-fibo2-dev-bf16": "remote-fibo2-dev-nvfp4",
+            }.get(settings.active_model, settings.active_model)
+        amount = settings.auto_feather_percent
+        settings.auto_feather_percent = max(0.0, min(100.0, amount)) if math.isfinite(amount) else 10.0
+        if settings.fibo_edit_mode not in FIBO_EDIT_MODES:
+            settings.fibo_edit_mode = "preserve"
+        if settings.fibo_context_mode not in FIBO_CONTEXT_MODES:
+            settings.fibo_context_mode = "local"
+        for key, (low, high, default, _label) in FIBO_PERCENT_RANGES.items():
+            amount = getattr(settings, key)
+            setattr(settings, key, max(low, min(high, amount)) if math.isfinite(amount) else default)
         return settings
 
     def _move_aside(self, path: Path) -> None:
@@ -215,6 +265,10 @@ class Settings:
     @property
     def active_url(self) -> str:
         """Base URL of the selected backend."""
+        if self.remote_fibo:
+            from .sources import get_source
+
+            return get_source(self.fibo_source).url
         return self.a1111_url if self.backend == "a1111" else self.url
 
     def model_for(self, quality: str | None = None) -> ModelSpec:

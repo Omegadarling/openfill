@@ -18,6 +18,10 @@ ProgressCallback = Callable[[float, str], None]
 PreviewCallback = Callable[[bytes], None]  # raw ComfyUI binary frame (see progress.parse_preview_frame)
 CancelCallback = Callable[[], bool]  # polled; True aborts the running job
 
+QWEN21_EDIT_TEMPLATE = "qwen21_edit"
+QWEN21_FULL_FILE = "qwen_image_2.1_bf16.safetensors"
+QWEN21_LIGHTNING_FILE = "qwen_image_2.1_lightning_v2_rl_bf16.safetensors"
+
 
 class BackendError(RuntimeError):
     """Base class for everything the backend can report to the user."""
@@ -94,8 +98,14 @@ class ModelSpec:
             "sdxl": "sdxl_fooocus",
             "flux": "flux_fill",
             "qwen_image": "qwen_edit",
+            "fibo2": "fibo2_edit",
             "inpaint_model": "inpaint_model",
         }.get(self.arch, "sd15_inpaint")
+
+    @property
+    def qwen21_lightning(self) -> bool:
+        filename = self.unet.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        return self.effective_template == QWEN21_EDIT_TEMPLATE and filename == QWEN21_LIGHTNING_FILE
 
     @property
     def prompt_free(self) -> bool:
@@ -137,6 +147,9 @@ class InpaintRequest:
     prefill_style: str = "blur"  # "blur": soften existing content (fill); "border": paint the area
     # from its surroundings first (expand, object removal)
     color_match: float = 1.0  # strength of the post color correction (0 = off)
+    # FIBO only: masked source-latent editing for structure, or replace selected
+    # content using FIBO's grey-region reference conditioning and empty latent.
+    fibo_edit_mode: str = "preserve"  # preserve | replace
 
     @property
     def needs_scaling(self) -> bool:

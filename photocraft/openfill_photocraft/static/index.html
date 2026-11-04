@@ -183,9 +183,23 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="stack"><div class="label">Engine</div><div style="display:flex;gap:8px"><button class="btn" id="check">Check</button><button class="btn" id="stop">Stop engine</button><button class="btn" id="logs">Logs</button></div><div class="note dim" id="check-out" hidden></div></div>
     </div>
     <div class="stack" id="sec-generation" style="gap:12px" hidden>
-      <div class="grid2"><div class="field"><span class="label">Steps</span><input id="s-steps" type="number"></div><div class="field"><span class="label">Prompt strictness (CFG)</span><input id="s-cfg" type="number" step="0.5"></div></div>
-      <div class="grid2"><div class="field"><span class="label">Repaint margin (%)</span><input id="s-grow_percent" type="number"></div><div class="field"><span class="label">Edge softness (%)</span><input id="s-feather_percent" type="number"></div></div>
-      <div class="small">Steps: more is slower and finer. Strictness: how closely the prompt is followed. Margin: how far past the selection the fill may repaint, as a share of its size.</div>
+      <div class="grid2" data-legacy-generation><div class="field"><span class="label">Steps</span><input id="s-steps" type="number"></div><div class="field"><span class="label">Prompt strictness (CFG)</span><input id="s-cfg" type="number" step="0.5"></div></div>
+      <div class="grid2" data-legacy-generation><div class="field"><span class="label">Repaint margin (%)</span><input id="s-grow_percent" type="number"></div><div class="field"><span class="label">Edge softness (%)</span><input id="s-feather_percent" type="number"></div></div>
+      <div class="small" data-legacy-generation>Steps: more is slower and finer. Strictness: how closely the prompt is followed. Margin: how far past the selection the fill may repaint, as a share of its size.</div>
+      <label class="check"><input type="checkbox" id="s-auto_feather" checked><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>Auto-feather selection</span></label>
+      <div class="field"><label class="label" for="s-auto_feather_percent">Feather area <output id="auto-feather-value" for="s-auto_feather_percent">10%</output></label><input id="s-auto_feather_percent" type="range" min="0" max="100" step="1" value="10" aria-describedby="auto-feather-help"></div>
+      <div class="small" id="auto-feather-help">Soften edges over roughly the outer 10% of the selected area. Larger selections get a wider feather; the selection does not grow.</div>
+      <div class="stack" id="fibo-edit-settings" style="gap:12px" hidden>
+        <div class="divider"></div>
+        <div class="field"><label class="label" for="s-fibo_edit_mode">FIBO editing</label><select id="s-fibo_edit_mode" aria-describedby="fibo-mode-help"><option value="preserve">Preserve structure</option><option value="replace">Replace selected content</option></select></div>
+        <div class="small" id="fibo-mode-help">Starts from the original pixels and limits regeneration to the selection, retaining more of the existing structure. Some details may still change.</div>
+        <div class="field"><label class="label" for="s-fibo_context_mode">Image context</label><select id="s-fibo_context_mode" aria-describedby="fibo-context-help"><option value="local">Surrounding area</option><option value="full">Full image</option></select></div>
+        <div class="field"><label class="label" for="s-fibo_context_percent">Context margin <output id="fibo-context-value" for="s-fibo_context_percent">100%</output></label><input id="s-fibo_context_percent" type="range" min="25" max="200" step="1" value="100" aria-describedby="fibo-context-help"></div>
+        <div class="small" id="fibo-context-help">Include a margin on each side equal to 100% of the selection's larger dimension. The editable area stays the same.</div>
+        <label class="check"><input type="checkbox" id="s-fibo_boundary_match" checked><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>Match boundary colors</span></label>
+        <div class="field"><label class="label" for="s-fibo_boundary_strength">Matching strength <output id="fibo-boundary-value" for="s-fibo_boundary_strength">50%</output></label><input id="s-fibo_boundary_strength" type="range" min="0" max="100" step="1" value="50" aria-describedby="fibo-boundary-help"></div>
+        <div class="small" id="fibo-boundary-help">Reduce color seams at selection edges. This does not reconnect mismatched shapes.</div>
+      </div>
       <div class="note" id="gen-out" hidden></div>
     </div>
   </div>
@@ -218,7 +232,7 @@ const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0
 const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
-let mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
+let mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="", remoteFibo=false, backendSource="";
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
 $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
@@ -228,9 +242,9 @@ $("targets").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("tar
 $("sections").onclick=e=>{const b=e.target.closest("button");if(b)showSection(b.dataset.sec)};
 $("gear").onclick=()=>gear?showTools():showGear(section);
 $("back").onclick=()=>showTools();
-function setMode(m){mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
+function setMode(m){if(remoteFibo)m="fill";mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
   $("remove-text").hidden=m!=="remove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove";
-  $("advanced").hidden=m!=="fill";$("prompt").placeholder=PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets()}
+  $("advanced").hidden=remoteFibo||m!=="fill";$("prompt").placeholder=remoteFibo?"Qwen and FIBO: describe the change. SDXL: describe what should appear in the selection. Select All to edit the whole image.":PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets()}
 function showTools(){gear=false;$("tools").hidden=false;$("gearview").hidden=true;$("head-tools").hidden=false;$("head-view").hidden=true;$("gear").classList.remove("on")}
 function showGear(s){gear=true;$("tools").hidden=true;$("gearview").hidden=false;$("head-tools").hidden=true;$("head-view").hidden=false;$("gear").classList.add("on");showSection(s||"models")}
 function showSection(s){section=s;segPick($("sections"),$("sections").querySelector(`[data-sec="${s}"]`));
@@ -248,7 +262,7 @@ function say(t,kind){note=t?{text:t,kind:kind||"bad",base:baseContext()[0]}:null
 async function start(kind,body){try{await post("/api/"+kind,body);lastSeq=-1;say("")}catch(e){say(e.message,"bad")}}
 $("go").onclick=()=>{if(busy)return;const prompt=$("prompt").value.trim(),model=$("model").value||"active";
   if(mode==="fill"||mode==="remove"){if(!sel){say(NO_SEL,"bad");return}
-    const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:mode==="fill"?+$("strength").value:1,seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
+    const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:remoteFibo?undefined:(mode==="fill"?+$("strength").value:1),seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
     if(mode==="remove"){b.removal=model;b.model="active";if(["default",...PROMPT_FREE].includes(model))b.variations=1}else b.model=model;
     start("fill",b)}
   else if(mode==="expand"){const m=["left","top","right","bottom"].map(k=>+$("e-"+k).value);if(!m.some(Boolean)){say("Enter the pixels to add on each side, or pick a ratio.","bad");return}
@@ -297,7 +311,8 @@ function fillSelect(){const s=$("model");let opts;
   s.value=want||"";$("go").disabled=busy||!opts.length}
 
 function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.statusText||"").startsWith("Downloading"))||models.find(r=>r.statusText==="Waiting");
-  if(!s.comfyReady)html=`<div class="head">${svg("warn",C.warn)}<span class="t">AI engine not found</span></div><div class="small">OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it.</div><div style="display:flex;gap:8px"><button class="btn accent flex" id="setup-folder">Choose folder</button><button class="btn flex" id="setup-help">How to install</button></div>`;
+  if(!s.comfyReady&&s.remoteFibo)html=`<div class="head">${svg("warn",C.warn)}<span class="t">${esc(s.backendName)} is unavailable</span></div><div class="small">${esc(s.comfyProblem||"Start ComfyUI on the selected computer, then press Check.")}</div>`;
+  else if(!s.comfyReady)html=`<div class="head">${svg("warn",C.warn)}<span class="t">AI engine not found</span></div><div class="small">OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it.</div><div style="display:flex;gap:8px"><button class="btn accent flex" id="setup-folder">Choose folder</button><button class="btn flex" id="setup-help">How to install</button></div>`;
   else if(dl){const pct=dl.statusText.startsWith("Downloading")?parseInt(dl.statusText.split(" ").pop()):0;html=`<div class="head">${svg("download",C.accent)}<span class="t">Downloading ${esc(short(dl.name))}</span><span class="r">${pct}%</span></div><div class="bar"><i style="width:${pct}%"></i></div><div class="small">You can keep working.</div>`}
   else if(models.length&&!models.some(r=>r.installed&&r.runnable&&(r.capabilities||[]).includes("fill")))html=`<div class="head">${svg("warn",C.warn)}<span class="t">No models installed</span></div><div class="small">Install at least one model to start. LaMa and DreamShaper 8 (2.2 GB) cover every tool.</div><div style="display:flex"><button class="btn accent flex" id="setup-models">Open model manager</button></div>`;
   if(c.dataset.html!==html){c.dataset.html=html;c.innerHTML=html;c.hidden=!html;
@@ -306,13 +321,23 @@ function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.
 function fmt(s){s=Math.round(s);return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")}
 async function tick(){
   let s;try{s=await get("/api/state")}catch(e){$("status").textContent="OpenFill stopped";return}
+  if(s.remoteFibo&&!remoteFibo){remoteFibo=true;document.querySelectorAll("[data-mode]").forEach(b=>{b.hidden=b.dataset.mode!=="fill";if(!b.hidden)b.textContent="Image Edit"});
+    $("token").closest(".stack").hidden=true;$("stop").hidden=true;
+    Array.from($("sec-engine").children).slice(0,5).forEach(e=>e.hidden=true);
+    const remote=document.createElement("div");remote.className="stack";remote.innerHTML='<label class="field"><span class="label">Run edits on</span><select id="fibo-source" aria-label="ComfyUI source"></select></label><div class="small" id="source-detail"></div><div class="small">Start ComfyUI on the chosen computer. OpenFill connects to that source and lists its available Qwen, FIBO, and SDXL edit models.</div>';$("sec-engine").prepend(remote);
+    const sources=await get("/api/sources");$("fibo-source").replaceChildren(...sources.sources.map(src=>{const option=document.createElement("option");option.value=src.id;option.textContent=src.name;return option}));
+    $("fibo-source").onchange=async()=>{const source=$("fibo-source").value;$("fibo-source").disabled=true;settingsNote("Connecting to the selected source...","dim");try{const r=await post("/api/backend/source",{source});settingsNote(r.name+": "+r.detail,r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}finally{await loadModels();await tick()}};
+    document.querySelectorAll("[data-legacy-generation]").forEach(e=>e.hidden=true);$("fibo-edit-settings").hidden=false;
+    const defaults=document.createElement("div");defaults.className="small";defaults.textContent="Qwen Image 2.1: describe the change and what to keep. Lightning v2 RL uses its own four-step schedule. FIBO: describe the change; Turbo 4 steps / CFG 1, Dev 30 steps / CFG 5. SDXL: describe the desired selected content; 25 steps / CFG 6, DPM++ 2M/Karras, 75% change strength. Pixels outside the selection are preserved.";$("sec-generation").prepend(defaults);setMode("fill")}
   if(s.pick){if(lastPick<0)lastPick=s.pick.seq;else if(s.pick.seq!==lastPick){lastPick=s.pick.seq;
     location.hash="#"+(s.pick.action==="panel"?"fill":s.pick.action);window.focus();if(s.pick.action!=="remove")$("prompt").focus();if(s.pick.action==="remove"&&!s.busy)$("go").click()}}
+  if(remoteFibo){if(backendSource!==s.backendSource){models=[];fillSelect();}backendSource=s.backendSource;$("fibo-source").value=s.backendSource;$("fibo-source").disabled=s.busy;$("source-detail").textContent=s.backendName+" · "+s.backendUrl;$("save-bar").hidden=!(gear&&section==="generation");}
   pc=s.photocraft||{};doc=pc.document||null;sel=pc.selection||null;comfy=s.comfyReady;
   if(s.activeModel!==activeId){activeId=s.activeModel||"";fillSelect()}
   const st=!comfy?["Not set up","warn"]:["Ready","ok"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
   context();if(mode==="expand"){presets();expSize()}setupCard(s);
   const j=s.job;busy=s.busy;jobState=j.state;
+  $("cancel").disabled=!!j.committing;$("cancel").textContent=j.committing?"Adding result...":"Cancel";
   $("go").disabled=busy||$("model").value==="";
   const several=j.state==="done"&&j.variations.length>1;
   $("go").hidden=j.state==="running"||several;$("cancel").hidden=j.state!=="running";document.querySelectorAll("[data-keep]").forEach(b=>b.hidden=!several);
@@ -335,7 +360,9 @@ async function tick(){
 }
 
 // What a model can run, as catalog.job_hint says it: any fill model can also remove; erasers are marked.
-function detail(r){const words={fill:"fill",expand:"expand",txt2img:"create",remove:"remove",edit:"edit"};
+function detail(r){if(r.template==="sdxl_edit")return "SDXL masked editing · describe the desired result · 75% change strength";if(r.template==="sdxl_inpaint_edit")return "SDXL native inpainting · describe the desired result";if(r.template==="fibo2_edit")return ((r.id||"").endsWith("-heretic")?"Heretic NVFP4 encoder":"Original BF16 encoder")+" · instruction editing · selected area or whole image";
+  if(r.template==="qwen21_edit")return ((r.id||"").endsWith("-lightning-v2-rl")?"Lightning v2 RL · four steps":"Base BF16 checkpoint · 25 steps")+" · instruction editing · selected area or whole image";
+  const words={fill:"fill",expand:"expand",txt2img:"create",remove:"remove",edit:"edit"};
   const caps=(r.capabilities||[]).filter(c=>c in words);const list=caps.map(c=>words[c]);
   if(caps.includes("fill")&&!caps.includes("remove"))list.push("remove");
   let what=list.join(", ");what=what.charAt(0).toUpperCase()+what.slice(1);
@@ -343,12 +370,12 @@ function detail(r){const words={fill:"fill",expand:"expand",txt2img:"create",rem
   if(!caps.length||r.runnable===false)what=r.neededBy||"Needed by other models";return[what,r.size].filter(Boolean).join(" · ")}
 function mnote(t,kind){const n=$("mnote");n.hidden=!t;n.textContent=t||"";n.className="note "+(kind||"bad")}
 async function act(fn){try{await fn();mnote("")}catch(e){mnote(e.message,"bad")}loadModels()}
-async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}models=m.rows||[];$("hw").textContent=m.hardware||m.error||"";
+async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}if(remoteFibo&&m.source!==backendSource)return;models=m.rows||[];$("hw").textContent=m.hardware||m.error||"";
   fillSelect();if(!gear||section!=="models")return;
   const inst=models.filter(r=>r.installed).sort((a,b)=>(!a.runnable)-(!b.runnable)||(!a.active)-(!b.active)||a.name.localeCompare(b.name));
   const avail=models.filter(r=>!r.installed&&r.runnable).sort((a,b)=>a.name.localeCompare(b.name));
   const row=(r)=>{const st=r.statusText||"";let right="",extra="";const busyRow=/^(Downloading|Waiting)/.test(st);
-    if(r.installed){if((r.missing_models||[]).length)right=`<button class="btn" data-get="${r.id}">Download</button>`;else if(/^(Removing|Installing|Working)/.test(st))right=`<span class="pct">${esc(st)}</span>`;else if(r.runnable)right=`<button class="icon-btn" data-remove="${r.id}" aria-label="Uninstall ${esc(r.name)}">${svg("trash","currentColor")}</button>`}
+    if(r.installed){if((r.missing_models||[]).length)right=`<button class="btn" data-get="${r.id}">Download</button>`;else if(/^(Removing|Installing|Working)/.test(st))right=`<span class="pct">${esc(st)}</span>`;else if(r.runnable&&!r.remote)right=`<button class="icon-btn" data-remove="${r.id}" aria-label="Uninstall ${esc(r.name)}">${svg("trash","currentColor")}</button>`}
     else if(busyRow){const pct=st.startsWith("Downloading")?st.split(" ").pop():"Waiting";right=`<span class="pct">${pct}</span><button class="icon-btn" data-stop="${r.id}" aria-label="Stop downloading">${svg("close","currentColor")}</button>`;if(st.startsWith("Downloading"))extra=`<div class="bar"><i style="width:${parseInt(pct)||0}%"></i></div>`}
     else right=`<button class="btn" data-get="${r.id}">${r.partial?"Resume":"Download"}</button>`;
     const det=r.installed&&!r.runnable?[r.neededBy||"Needed by other models",r.size].join(" · "):detail(r)+((r.missing_models||[]).length?" · Needs one more download":"");
@@ -359,11 +386,15 @@ async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return
   document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=()=>{const r=models.find(x=>x.id===b.dataset.remove);if(confirm(`Uninstall ${short(r.name)}? Its files (${r.size}) are deleted. Files other models use are kept.`))act(()=>post("/api/models/remove",{id:r.id}))})}
 $("save-token").onclick=async()=>{try{await post("/api/models/token",{token:$("token").value});$("token").value="";mnote("Hugging Face key saved.","ok")}catch(e){mnote(e.message,"bad")}};
 
-async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}}
+function syncAutoFeather(){const amount=+$("s-auto_feather_percent").value;$("auto-feather-value").textContent=amount+"%";$("s-auto_feather_percent").disabled=!$("s-auto_feather").checked;$("auto-feather-help").textContent=`Soften edges over roughly the outer ${amount}% of the selected area. Larger selections get a wider feather; the selection does not grow.`}
+$("s-auto_feather").onchange=syncAutoFeather;$("s-auto_feather_percent").oninput=syncAutoFeather;
+function syncFiboOptions(){const full=$("s-fibo_context_mode").value==="full",amount=+$("s-fibo_context_percent").value;$("fibo-mode-help").textContent=$("s-fibo_edit_mode").value==="preserve"?"Starts from the original pixels and limits regeneration to the selection, retaining more of the existing structure. Some details may still change.":"Rebuild the selected content using its surroundings. Original details inside may be replaced.";$("s-fibo_context_percent").disabled=full;$("fibo-context-value").textContent=amount+"%";$("fibo-context-help").textContent=full?"Use the full image as context. Small selections may lose fine detail at the model's working resolution.":`Include a margin on each side equal to ${amount}% of the selection's larger dimension. The editable area stays the same.`;$("s-fibo_boundary_strength").disabled=!$("s-fibo_boundary_match").checked;$("fibo-boundary-value").textContent=$("s-fibo_boundary_strength").value+"%"}
+$("s-fibo_edit_mode").onchange=syncFiboOptions;$("s-fibo_context_mode").onchange=syncFiboOptions;$("s-fibo_context_percent").oninput=syncFiboOptions;$("s-fibo_boundary_match").onchange=syncFiboOptions;$("s-fibo_boundary_strength").oninput=syncFiboOptions;
+async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}syncAutoFeather();syncFiboOptions()}
 function settingsNote(t,kind){const n=section==="generation"?$("gen-out"):$("check-out");n.hidden=!t;n.textContent=t;n.className="note "+(kind||"dim")}
-$("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(el.type==="number"?+el.value:el.value)});
+$("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(["number","range"].includes(el.type)?+el.value:el.value)});
   try{await post("/api/settings",b);settingsNote("Settings saved.","ok")}catch(e){settingsNote(e.message,"bad")}};
-$("check").onclick=async()=>{settingsNote("Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
+$("check").onclick=async()=>{settingsNote(remoteFibo?"Checking the selected ComfyUI source...":"Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
 $("stop").onclick=async()=>{const r=await post("/api/backend/stop");settingsNote(r.message,"dim")};
 $("logs").onclick=()=>post("/api/logs");
 

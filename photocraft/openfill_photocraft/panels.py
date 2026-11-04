@@ -16,8 +16,11 @@ removals, checks and saves run in a worker thread and report back through ``Bar.
 from __future__ import annotations
 
 import threading
+import math
 import tkinter as tk
 from typing import TYPE_CHECKING, Any
+
+from openfill.config import FIBO_CONTEXT_MODES, FIBO_EDIT_MODES, validate_fibo_settings
 
 from . import ui
 from .ui import BAD, BG, CW, DIM, OK
@@ -33,6 +36,13 @@ SETTINGS = (
     ("cfg", "Prompt strictness (CFG)", float),
     ("grow_percent", "Repaint margin (%)", float),
     ("feather_percent", "Edge softness (%)", float),
+    ("auto_feather", "Auto-feather selection", bool),
+    ("auto_feather_percent", "Auto-feather area (%)", float),
+    ("fibo_edit_mode", "FIBO edit mode", str),
+    ("fibo_context_mode", "FIBO image context", str),
+    ("fibo_context_percent", "Surrounding context (%)", float),
+    ("fibo_boundary_match", "Match boundary colors", bool),
+    ("fibo_boundary_strength", "Boundary color matching (%)", float),
     ("extra_server_args", "Extra ComfyUI options", str),
 )
 SECTIONS = (("models", "Models"), ("engine", "Engine"), ("generation", "Generation"))
@@ -84,6 +94,7 @@ class GearView(tk.Frame):
     def update_view(self, facts: dict[str, Any]) -> None:
         """Keep the models list current, shown or not, so opening it shows it at once."""
         self.models.update_view(facts)
+        self.engine.sync_source()
 
     def say(self, text: str, color: str = OK) -> None:
         {"models": self.models, "engine": self.engine, "generation": self.generation}[self.section].say(text, color)
@@ -98,6 +109,8 @@ class GearView(tk.Frame):
         self.engine.extra.set(str(settings.extra_server_args or ""))
         for key, entry in self.generation.fields.items():
             entry.set(str(getattr(settings, key)))
+        self.generation.load_auto_feather(settings)
+        self.generation.load_fibo(settings)
 
     def values(self) -> dict[str, Any]:
         raw: dict[str, Any] = {
@@ -106,13 +119,18 @@ class GearView(tk.Frame):
             "extra_server_args": self.engine.extra.get(),
         }
         raw.update({key: entry.get() for key, entry in self.generation.fields.items()})
+        raw.update(self.generation.auto_feather_values())
+        raw.update(self.generation.fibo_values())
         out = {}
         for key, label, kind in SETTINGS:
             try:
                 out[key] = kind(raw[key]) if kind is not bool else bool(raw[key])
             except ValueError as err:
                 raise ValueError(f"{label}: {raw[key]!r} is not a number.") from err
-        return out
+        if not math.isfinite(out["auto_feather_percent"]):
+            raise ValueError("Auto-feather area must be a finite percentage.")
+        out["auto_feather_percent"] = max(0.0, min(100.0, out["auto_feather_percent"]))
+        return validate_fibo_settings(out)
 
     def save(self) -> None:
         app = self.bar.service.app
@@ -129,6 +147,8 @@ class GearView(tk.Frame):
                 self.bar.service.warm_up()
             for key, value in values.items():
                 setattr(app.settings, key, value)
+            if app.settings.remote_fibo:
+                app.settings.autostart = False
             app.settings.save(app.paths.config)
             app.reload_settings()
         except Exception as err:  # noqa: BLE001 - says what is wrong
@@ -160,6 +180,11 @@ class ModelsView(tk.Frame):
         self.token.pack(side="left")
         save.pack(side="left", padx=(8, 0))
         self.key_box.pack(fill="x", pady=(12, 0))
+        if bar.service.app.settings.remote_fibo:
+            # Keep the empty frame packed: _build uses it as the list insertion
+            # anchor. Hiding the frame itself breaks Tk's pack(before=...).
+            for child in self.key_box.winfo_children():
+                child.pack_forget()
         self._shown: tuple = ()
         self._rows: dict[str, dict[str, Any]] = {}
 
@@ -181,8 +206,8 @@ class ModelsView(tk.Frame):
         available = sorted((r for r in rows if not r["installed"]), key=lambda r: r["name"].lower())
         order = (tuple(r["id"] for r in installed), tuple(r["id"] for r in available))
         if order != self._shown:  # which models are where: lay both lists out again
-            self._shown = order
             self._build(installed, available)
+            self._shown = order  # record only after the widgets were built successfully
         else:  # the same rows: rebuild only a row whose buttons change (a download starts, ...)
             for box, rows in ((self.installed, installed), (self.available, available)):
                 for i, row in enumerate(rows):
@@ -289,7 +314,7 @@ class ModelsView(tk.Frame):
             elif mode == "working":
                 t = ui.small(right, status, wrap=0)
                 add(t, f.small.measure(status))
-            elif row["runnable"]:
+            elif row["runnable"] and not row.get("remote"):
                 add(ui.IconButton(right, "trash", lambda r=row: self._uninstall(r)), 28)
         elif mode == "busy":
             parts["percent"] = ui.small(right, "", wrap=0)
@@ -395,6 +420,47 @@ class EngineView(tk.Frame):
         for i, (label, command) in enumerate((("Check", self.check), ("Stop engine", self.stop), ("Logs", self.logs))):
             ui.Button(row, label, command).pack(side="left", padx=(8 if i else 0, 0))
         self.result = ui.small(tools, "")
+        if bar.service.app.settings.remote_fibo:
+            for child in self.winfo_children():
+                child.pack_forget()
+            from openfill.sources import list_sources
+            self.sources = {item["label"]: item["id"] for item in list_sources()}
+            ui.caption(self, "Run edits on").pack(anchor="w", pady=(12, 0))
+            self.source = ui.Select(self, CW, command=self.choose_source)
+            self.source.pack(anchor="w", pady=(8, 0))
+            self.source_url = ui.small(self, "")
+            self.source_url.pack(anchor="w", pady=(8, 0))
+            self.sync_source()
+            ui.small(self, "Start ComfyUI on the chosen computer. OpenFill connects to that source and lists its available Qwen, FIBO, and SDXL edit models.").pack(fill="x", pady=(8, 0))
+            row = ui.frame(self)
+            row.pack(anchor="w", pady=(12, 0))
+            ui.Button(row, "Check", self.check).pack(side="left")
+            ui.Button(row, "Logs", self.logs).pack(side="left", padx=(8, 0))
+            self.result = ui.small(self, "")
+
+    def sync_source(self) -> None:
+        if not hasattr(self, "source"):
+            return
+        app = self.bar.service.app
+        self.source.set_values([] if self.bar.service.busy() else list(self.sources))
+        self.source.set(app.source_label())
+        self.source_url.configure(text=app.settings.url)
+
+    def choose_source(self, label: str) -> None:
+        self.say(f"Connecting to {label}...", DIM)
+        source_id = self.sources[label]
+
+        def work() -> None:
+            try:
+                result = self.bar.service.select_source(source_id)
+                text = (f"Using {result['name']}. " if result["ok"] else f"{result['name']} is selected but unavailable. ") + result["detail"]
+                self.bar.call_soon(self.say, text, OK if result["ok"] else BAD)
+            except Exception as err:
+                self.bar.call_soon(self.say, str(err), BAD)
+            finally:
+                self.bar.refresher.wake.set()
+                self.bar.call_soon(self.sync_source)
+        threading.Thread(target=work, daemon=True).start()
 
     def say(self, text: str, color: str = OK) -> None:
         if not text:
@@ -412,15 +478,17 @@ class EngineView(tk.Frame):
 
     def check(self) -> None:
         bar = self.bar
-        self.say("Checking the AI engine (starting it takes about a minute)...", DIM)
+        self.say("Checking the selected ComfyUI source..." if bar.service.app.settings.remote_fibo else
+                 "Checking the AI engine (starting it takes about a minute)...", DIM)
 
         def work() -> None:
             try:
-                health = bar.service.app.check_backend()
+                health = bar.service.check_backend()
                 device = getattr(health, "device", "")
                 text = ("Working: " if health.ok else "Not working: ") + str(health.detail)
                 text += f" on {device}." if device else "."
                 bar.call_soon(self.say, text, OK if health.ok else BAD)
+                bar.refresher.wake.set()
             except Exception as err:  # noqa: BLE001
                 bar.call_soon(self.say, str(err), BAD)
 
@@ -435,7 +503,7 @@ class EngineView(tk.Frame):
 
 
 class GenerationView(tk.Frame):
-    """Steps, prompt strictness, repaint margin and edge softness."""
+    """Generation settings and selection-area-based auto-feather."""
 
     def __init__(self, bar: Bar, parent: tk.Misc) -> None:
         super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
@@ -457,6 +525,134 @@ class GenerationView(tk.Frame):
             "Margin: how far past the selection the fill may repaint, as a share of its size.",
         ).pack(fill="x", pady=(12, 0))
         self.result = ui.small(self, "")
+        if bar.service.app.settings.remote_fibo:
+            for child in self.winfo_children():
+                child.pack_forget()
+            ui.small(self, "FIBO: describe the change; Turbo 4 steps / CFG 1, Dev 30 steps / CFG 5. SDXL: describe the desired selected content (for example, a blue ceramic teapot); 25 steps / CFG 6, DPM++ 2M/Karras, 75% change strength. Pixels outside the selection are preserved.").pack(fill="x", pady=(12, 0))
+            ui.small(self, "Qwen Image 2.1: describe the change and what to keep. Lightning v2 RL uses its own four-step schedule.").pack(fill="x", pady=(8, 0))
+            ui.small(self, "The PhotoCraft selection controls the visible edit. Auto-feather softens its edges inward without growing the selection.").pack(fill="x", pady=(12, 0))
+            self.result = ui.small(self, "")
+        self.auto_feather = ui.Checkbox(self, "Auto-feather selection")
+        self.auto_feather.pack(fill="x", pady=(12, 0))
+        area_row = ui.frame(self)
+        area_row.pack(fill="x", pady=(4, 0))
+        ui.caption(area_row, "Feather area").pack(side="left")
+        self.auto_feather_amount = ui.small(area_row, "10%", wrap=0)
+        self.auto_feather_amount.pack(side="right")
+        self.auto_feather_percent = tk.DoubleVar(self, 10.0)
+        self.auto_feather_slider = tk.Scale(
+            self, from_=0, to=100, resolution=1, orient="horizontal", showvalue=False,
+            variable=self.auto_feather_percent, length=CW, width=12,
+            bg=BG, fg=ui.TEXT, troughcolor=ui.PANEL, activebackground=ui.ACCENT,
+            highlightthickness=0, bd=0, sliderrelief="flat", relief="flat",
+        )
+        self.auto_feather_slider.pack(fill="x", pady=(2, 0))
+        self.auto_feather_help = ui.small(
+            self, "Soften edges over roughly the outer 10% of the selected area. Larger selections get a wider feather; the selection does not grow.",
+        )
+        self.auto_feather_help.pack(fill="x", pady=(4, 0))
+        self.auto_feather.var.trace_add("write", self._sync_auto_feather)
+        self.auto_feather_percent.trace_add("write", self._sync_auto_feather)
+        self.load_auto_feather(bar.service.app.settings)
+        self._build_fibo(bar.service.app.settings)
+
+    def _build_fibo(self, settings) -> None:
+        self.fibo_box = box = ui.frame(self)
+        if settings.remote_fibo:
+            box.pack(fill="x", pady=(16, 0))
+        ui.caption(box, "FIBO editing").pack(anchor="w")
+        self.fibo_edit_mode = ui.Select(box, CW, command=lambda _value: self._sync_fibo())
+        self.fibo_edit_mode.set_values(list(FIBO_EDIT_MODES.values()))
+        self.fibo_edit_mode.pack(fill="x", pady=(8, 0))
+        self.fibo_mode_help = ui.small(box, "")
+        self.fibo_mode_help.pack(fill="x", pady=(4, 0))
+        ui.caption(box, "Image context").pack(anchor="w", pady=(12, 0))
+        self.fibo_context_mode = ui.Select(box, CW, command=lambda _value: self._sync_fibo())
+        self.fibo_context_mode.set_values(list(FIBO_CONTEXT_MODES.values()))
+        self.fibo_context_mode.pack(fill="x", pady=(8, 0))
+        self.fibo_context_percent = tk.DoubleVar(self, 100.0)
+        self.fibo_context_amount, self.fibo_context_slider = self._fibo_slider(
+            box, "Context margin", self.fibo_context_percent, 25, 200,
+        )
+        self.fibo_context_help = ui.small(box, "")
+        self.fibo_context_help.pack(fill="x", pady=(4, 0))
+        self.fibo_boundary_match = ui.Checkbox(box, "Match boundary colors")
+        self.fibo_boundary_match.pack(fill="x", pady=(12, 0))
+        self.fibo_boundary_strength = tk.DoubleVar(self, 50.0)
+        self.fibo_boundary_amount, self.fibo_boundary_slider = self._fibo_slider(
+            box, "Matching strength", self.fibo_boundary_strength, 0, 100,
+        )
+        ui.small(box, "Reduce color seams at selection edges. This does not reconnect mismatched shapes.").pack(fill="x", pady=(4, 0))
+        self.fibo_context_percent.trace_add("write", self._sync_fibo)
+        self.fibo_boundary_strength.trace_add("write", self._sync_fibo)
+        self.fibo_boundary_match.var.trace_add("write", self._sync_fibo)
+        self.load_fibo(settings)
+
+    @staticmethod
+    def _fibo_slider(parent, label, variable, low, high):
+        row = ui.frame(parent)
+        row.pack(fill="x", pady=(8, 0))
+        ui.caption(row, label).pack(side="left")
+        amount = ui.small(row, "", wrap=0)
+        amount.pack(side="right")
+        slider = tk.Scale(
+            parent, from_=low, to=high, resolution=1, orient="horizontal", showvalue=False,
+            variable=variable, length=CW, width=12, bg=BG, fg=ui.TEXT,
+            troughcolor=ui.PANEL, activebackground=ui.ACCENT, highlightthickness=0,
+            bd=0, sliderrelief="flat", relief="flat",
+        )
+        slider.pack(fill="x", pady=(2, 0))
+        return amount, slider
+
+    def _sync_fibo(self, *_args) -> None:
+        preserve = self.fibo_edit_mode.get() == FIBO_EDIT_MODES["preserve"]
+        self.fibo_mode_help.configure(text=(
+            "Starts from the original pixels and limits regeneration to the selection, retaining more of the existing structure. Some details may still change."
+            if preserve else "Rebuild the selected content using its surroundings. Original details inside may be replaced."
+        ))
+        full = self.fibo_context_mode.get() == FIBO_CONTEXT_MODES["full"]
+        amount = self.fibo_context_percent.get()
+        self.fibo_context_amount.configure(text=f"{amount:g}%")
+        self.fibo_context_slider.configure(state="disabled" if full else "normal")
+        self.fibo_context_help.configure(text=(
+            "Use the full image as context. Small selections may lose fine detail at the model's working resolution."
+            if full else f"Include a margin on each side equal to {amount:g}% of the selection's larger dimension. The editable area stays the same."
+        ))
+        self.fibo_boundary_amount.configure(text=f"{self.fibo_boundary_strength.get():g}%")
+        self.fibo_boundary_slider.configure(state="normal" if self.fibo_boundary_match.get() else "disabled")
+
+    def load_fibo(self, settings) -> None:
+        self.fibo_edit_mode.set(FIBO_EDIT_MODES.get(settings.fibo_edit_mode, FIBO_EDIT_MODES["preserve"]))
+        self.fibo_context_mode.set(FIBO_CONTEXT_MODES.get(settings.fibo_context_mode, FIBO_CONTEXT_MODES["local"]))
+        self.fibo_context_percent.set(settings.fibo_context_percent)
+        self.fibo_boundary_strength.set(settings.fibo_boundary_strength)
+        self.fibo_boundary_match.set(settings.fibo_boundary_match)
+        self._sync_fibo()
+
+    def fibo_values(self) -> dict[str, Any]:
+        return {
+            "fibo_edit_mode": {label: key for key, label in FIBO_EDIT_MODES.items()}.get(self.fibo_edit_mode.get(), ""),
+            "fibo_context_mode": {label: key for key, label in FIBO_CONTEXT_MODES.items()}.get(self.fibo_context_mode.get(), ""),
+            "fibo_context_percent": self.fibo_context_percent.get(),
+            "fibo_boundary_match": self.fibo_boundary_match.get(),
+            "fibo_boundary_strength": self.fibo_boundary_strength.get(),
+        }
+
+    def _sync_auto_feather(self, *_args) -> None:
+        amount = max(0.0, min(100.0, self.auto_feather_percent.get()))
+        self.auto_feather_amount.configure(text=f"{amount:g}%")
+        self.auto_feather_slider.configure(state="normal" if self.auto_feather.get() else "disabled")
+        self.auto_feather_help.configure(
+            text=f"Soften edges over roughly the outer {amount:g}% of the selected area. Larger selections get a wider feather; the selection does not grow.",
+        )
+
+    def load_auto_feather(self, settings) -> None:
+        self.auto_feather_percent.set(float(getattr(settings, "auto_feather_percent", 10.0)))
+        self.auto_feather.set(bool(getattr(settings, "auto_feather", True)))
+        self._sync_auto_feather()
+
+    def auto_feather_values(self) -> dict[str, Any]:
+        return {"auto_feather": self.auto_feather.get(), "auto_feather_percent": self.auto_feather_percent.get()}
 
     def say(self, text: str, color: str = OK) -> None:
         if not text:

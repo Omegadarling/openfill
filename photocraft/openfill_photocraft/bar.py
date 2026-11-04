@@ -148,12 +148,14 @@ def expand_margins(width: int, height: int, preset: tuple[int, int] | None) -> t
 class Refresher:
     """Slow facts for the panel, looked up off the UI thread every few seconds."""
 
-    CACHED = ("comfy_ok", "models", "active", "active_name", "rows", "hardware", "gpu_vendor")
+    CACHED = ("comfy_ok", "models", "active", "active_name", "rows", "hardware", "gpu_vendor", "source")
 
     def __init__(self, service: Service, cache: Path | None = None) -> None:
         self.service = service
         self.cache = cache
         self.facts: dict[str, Any] = self._load_cache()
+        if service.app.settings.remote_fibo:
+            self.facts.update(hardware=f"{service.app.source_label()} · ComfyUI", gpu_vendor="")
         self._hardware: str | None = self.facts.get("hardware") or None
         self._vendor: str | None = self.facts.get("gpu_vendor") or None  # nvidia, amd, intel, apple, none
         self._saved = ""
@@ -172,6 +174,8 @@ class Refresher:
         except (OSError, ValueError):
             return {}
         if not isinstance(data, dict) or not data.get("comfy_ok"):
+            return {}
+        if self.service.app.settings.remote_fibo and data.get("source") != self.service.app.settings.fibo_source:
             return {}
         data["models"] = {k: [tuple(m) for m in v] for k, v in (data.get("models") or {}).items()}
         for row in data.get("rows") or []:
@@ -195,14 +199,24 @@ class Refresher:
 
     def get(self) -> dict[str, Any]:
         with self.lock:
+            app = self.service.app
+            if app.settings.remote_fibo and self.facts.get("source") != app.settings.fibo_source:
+                return {"comfy_ok": True, "source": app.settings.fibo_source, "models": {}, "rows": [],
+                        "hardware": f"{app.source_label()} · ComfyUI"}
             return dict(self.facts)
 
     def _loop(self) -> None:
         while True:
+            source = self.service.app.settings.fibo_source
             try:
                 facts = self.look()
             except Exception as err:  # noqa: BLE001 - shown on the panel
                 facts = {"error": str(err)}
+                if self.service.app.settings.remote_fibo:
+                    facts.update(comfy_ok=False, comfy_problem=str(err), remote=True)
+            if source != self.service.app.settings.fibo_source:
+                continue  # a reply from the former source cannot repaint the new source's UI
+            facts["source"] = source
             with self.lock:
                 self.facts = facts
             self._save_cache(facts)
@@ -214,7 +228,7 @@ class Refresher:
         from openfill.config import comfy_layout, comfy_problem
 
         app = self.service.app
-        comfy_ok = comfy_layout(app.settings.comfy_dir) is not None
+        comfy_ok = app.settings.remote_fibo or comfy_layout(app.settings.comfy_dir) is not None
         facts: dict[str, Any] = {
             "comfy_ok": comfy_ok,
             "comfy_problem": "" if comfy_ok else comfy_problem(app.settings.comfy_dir),
@@ -277,7 +291,9 @@ class Refresher:
             if not row["runnable"]:
                 row["neededBy"] = needed_by(list(app.catalog), row["id"])
         facts["rows"] = rows
-        if self._hardware is None or self._vendor is None:
+        if app.settings.remote_fibo:
+            self._hardware, self._vendor = f"{app.source_label()} · ComfyUI", ""
+        elif self._hardware is None or self._vendor is None:
             try:
                 from openfill import hardware
 
@@ -293,6 +309,8 @@ class Refresher:
 
     def _gpu_vendor(self) -> str:
         """Who made the graphics card (``Hardware.gpu_vendor``), detected once."""
+        if self.service.app.settings.remote_fibo:
+            return ""
         if self._vendor is None:
             try:
                 from openfill import hardware
@@ -415,8 +433,9 @@ class Bar:
         self.bottom_gap.pack(fill="x")
 
         m = self.main
-        self.modes = ui.Seg(m, TABS, self.select_tab, CW, 13)
-        self.tab_buttons = {key: _SegKey(self.modes, key) for key, _label in TABS}
+        tabs = (("fill", "Image Edit"),) if self.service.app.settings.remote_fibo else TABS
+        self.modes = ui.Seg(m, tabs, self.select_tab, CW, 13)
+        self.tab_buttons = {key: _SegKey(self.modes, key) for key, _label in tabs}
         self.context_row = ui.frame(m)
         self.context_icon = tk.Label(self.context_row, bg=BG, bd=0, highlightthickness=0)
         self.context_icon.pack(side="left", anchor="n", pady=(1, 0))
@@ -904,7 +923,9 @@ class Bar:
     def show(self, action: str = "") -> None:
         """Bring the panel up; a menu action also picks its mode (Remove starts at once)."""
         self.expand()
-        if action in dict(TABS):
+        if action in ("models", "engine", "settings", "generation"):
+            self.select_view("engine" if action == "settings" else action)
+        elif action in dict(TABS):
             self.select_tab(action)
         elif self.view:
             self.select_tab(self.tab.get())
@@ -971,6 +992,8 @@ class Bar:
     _last_view = ""
 
     def _select_tab(self, key: str) -> None:
+        if self.service.app.settings.remote_fibo:
+            key = "fill"
         self.model_box.close()
         if self.view:
             self.view = ""
@@ -986,7 +1009,10 @@ class Bar:
         self.tab.set(key)
         self.modes.set(key)
         if key in PLACEHOLDERS:
-            self.prompt.set_placeholder(PLACEHOLDERS[key])
+            self.prompt.set_placeholder(
+                "Qwen and FIBO: describe the change. SDXL: describe what should appear in the selection. Select All to edit the whole image."
+                if self.service.app.settings.remote_fibo else PLACEHOLDERS[key]
+            )
         self.go.set(label=GO[key])
         self._layout_main()
         self._fill_models()
@@ -1029,7 +1055,8 @@ class Bar:
     def _layout_footer(self) -> None:
         if self.view:
             section = self.gear.section
-            buttons = [] if section == "models" else [self.save_button]
+            hidden = section == "models" or (self.service.app.settings.remote_fibo and section != "generation")
+            buttons = [] if hidden else [self.save_button]
         else:
             st = self.service.state.snapshot()
             if st["state"] == "running":
@@ -1129,6 +1156,8 @@ class Bar:
                 body.update(
                     prompt="" if kind == "remove" else prompt, remove=kind == "remove", strength=1.0, negative=""
                 )
+                if self.service.app.settings.remote_fibo:
+                    body.pop("strength")  # Let the selected edit model choose its tested default.
                 if kind == "remove":
                     removal = self._model_ids.get(self.model_choice.get(), "default")
                     body.update(removal=removal)
@@ -1358,6 +1387,8 @@ class Bar:
             self.gear.update_view(facts)
 
         st = self.service.state.snapshot()
+        self.cancel_button.set(disabled=bool(st.get("committing")),
+                               label="Adding result..." if st.get("committing") else "Cancel")
         if self.collapsed:
             if st["state"] == "running":
                 kind = "Remove" if (st["title"] or "").startswith(("Remove", "Object")) else None
@@ -1378,7 +1409,9 @@ class Bar:
         key: tuple = ()
         setup = facts.get("setup") or {}
         pre = facts.get("preflight") or {}
-        if facts and not facts.get("comfy_ok", True) and setup and "error" not in setup:
+        if self.service.app.settings.remote_fibo and facts.get("error"):
+            key = ("remote", "warn", WARN, f"{self.service.app.source_label()} is unavailable", str(facts["error"]), ())
+        elif facts and not facts.get("comfy_ok", True) and setup and "error" not in setup:
             key = (
                 "setup",
                 "download",

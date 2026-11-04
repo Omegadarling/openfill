@@ -281,6 +281,16 @@ class ComfyClient:
         """Remove every pending prompt from the queue."""
         self._json("POST", "/queue", {"clear": True})
 
+    def cancel_prompt(self, prompt_id: str) -> None:
+        """Delete only our pending prompt; a running job may finish on the server.
+
+        ComfyUI's interrupt endpoint targets whichever job is currently running.
+        A queue-read followed by interrupt has a race, so shared backends must
+        never use it for cancellation. The caller discards a late result.
+        """
+        if prompt_id:
+            self._json("POST", "/queue", {"delete": [prompt_id]})
+
     def wait_for(
         self,
         prompt_id: str,
@@ -291,6 +301,7 @@ class ComfyClient:
         preview: Callable[[bytes], None] | None = None,
         cancel: Callable[[], bool] | None = None,
         activity_extension: float = 0.0,
+        wait_for_queue: bool = False,
     ) -> dict:
         """Block until ``prompt_id`` finishes; return ``history[prompt_id]``.
 
@@ -301,7 +312,8 @@ class ComfyClient:
         Uses the websocket for step-level progress (and binary preview frames,
         handed raw to ``preview``) and falls back to polling ``/history`` when
         it is not available. ``cancel()`` is polled every loop; when it
-        returns True the job is interrupted, the queue cleared and
+        returns True only this pending job is removed (a running job is left
+        to finish safely on a shared backend), its result is discarded and
         :class:`ComfyApiError` ("cancelled") raised. Raises
         :class:`ComfyApiError` on timeout and :class:`ComfyExecutionError`
         on failure.
@@ -323,13 +335,20 @@ class ComfyClient:
             while True:
                 now = time.monotonic()
                 if now > deadline:
-                    raise ComfyApiError("timed out waiting for the backend")
+                    # Waiting behind someone else's render is not an inference
+                    # timeout. Only extend while our exact prompt remains queued.
+                    pending = self.queue().get("queue_pending", []) if wait_for_queue else []
+                    if any(len(item) > 1 and item[1] == prompt_id for item in pending):
+                        deadline = now + max(60.0, activity_extension)
+                        if progress:
+                            progress(0.0, "Waiting for earlier jobs on the selected backend...")
+                    else:
+                        raise ComfyApiError("timed out waiting for the backend")
                 if cancel and cancel():
-                    for action in (self.interrupt, self.clear_queue):
-                        try:
-                            action()
-                        except ComfyApiError:
-                            pass
+                    try:
+                        self.cancel_prompt(prompt_id)
+                    except ComfyApiError:
+                        pass
                     raise ComfyApiError("cancelled by the user")
                 if ws is not None:
                     try:

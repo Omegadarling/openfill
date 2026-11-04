@@ -842,7 +842,11 @@ def model_spec_for(entry: ModelEntry, catalog: Iterable[ModelEntry] = (), models
     eraser run on whichever FLUX.1 Fill is installed)."""
     if not entry.runnable:
         raise CatalogError(f"model '{entry.id}' is not a runnable model")
-    names = {f.role: f.loader_name for f in entry.files}
+    # Remote discoveries store category + '/' + the exact server option.
+    # These are identifiers validated by ComfyUI, not client filesystem paths:
+    # Windows backslashes and case must survive into the submitted graph.
+    names = {f.role: ((f.dest.partition("/")[2] or f.dest) if entry.source == "remote" else f.loader_name)
+             for f in entry.files}
     spec = ModelSpec(checkpoint=names.get("checkpoint", ""), arch=entry.arch, template=entry.template or "")
     spec.unet = names.get("unet", "")
     spec.clip1 = names.get("clip1", "")

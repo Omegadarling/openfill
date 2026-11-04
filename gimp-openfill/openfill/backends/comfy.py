@@ -40,7 +40,7 @@ ACTIVITY_EXTENSION = 180.0
 # FLUX and Qwen on a partly offloaded 8 GB card ran 87 to 151 s warm (median
 # 112 s); the old 134 to 166 s estimate cut 3 of 31 FLUX runs. Minimum timeout
 # for these families (any progress message still extends the deadline).
-SLOW_ARCHS = ("flux", "qwen_image")
+SLOW_ARCHS = ("flux", "qwen_image", "fibo2")
 SLOW_MODEL_FLOOR = 240.0
 # Model folders searched for the size of a request's model files.
 MODEL_FOLDERS = ("checkpoints", "diffusion_models", "unet", "clip", "text_encoders", "vae", "inpaint")
@@ -71,6 +71,7 @@ class ComfyBackend(Backend):
         self._caps: workflow.Capabilities | None = None
         self._progress = Progress()
         self._first_step = 0.0  # monotonic time of the first sampling step of the current job
+        self._prompt_id: str | None = None
 
     # ------------------------------------------------------------------
 
@@ -114,9 +115,9 @@ class ComfyBackend(Backend):
         return self._progress
 
     def cancel(self) -> None:
-        for action in (self.client.interrupt, self.client.clear_queue):
+        if self._prompt_id:
             try:
-                action()
+                self.client.cancel_prompt(self._prompt_id)
             except ComfyApiError:
                 pass
 
@@ -227,6 +228,7 @@ class ComfyBackend(Backend):
         self._report(progress, 0.02, "Submitting workflow...")
         try:
             prompt_id = self.client.queue_prompt(graph)
+            self._prompt_id = prompt_id
         except ComfyApiError as err:
             raise self._translate_queue_error(err, graph) from err
         self._progress = Progress(0.0, "queued", True)
@@ -242,6 +244,7 @@ class ComfyBackend(Backend):
                 preview=preview,
                 cancel=cancel,
                 activity_extension=0.0 if self.request_timeout else ACTIVITY_EXTENSION,
+                wait_for_queue=bool(model and model.effective_template in workflow.SELECTION_EDIT_TEMPLATES),
             )
         except ComfyExecutionError as err:
             if err.is_unsupported_gpu:

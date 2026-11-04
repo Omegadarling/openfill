@@ -21,7 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from . import caption, comfy_setup, geometry, hardware, local_models, quality, ui_text, workflow
+from . import caption, comfy_setup, geometry, hardware, local_models, png, quality, ui_text, workflow
 from . import catalog as cat
 from .backend import (
     SETTINGS_MENU,
@@ -32,6 +32,7 @@ from .backend import (
     InpaintRequest,
     ModelMissing,
     ModelSpec,
+    QWEN21_EDIT_TEMPLATE,
     Sampling,
     Txt2ImgRequest,
 )
@@ -43,6 +44,7 @@ from .geometry import Rect
 from .log import get_logger
 from .progress import OverallProgress
 from .server import ServerManager, _split_host_port, port_answers
+from .sources import Source, get_source
 from .workflow import model_display_name
 
 NO_OPENCV_MESSAGE = (
@@ -108,8 +110,13 @@ class App:
         self.runner_cls = runner_cls
         self._opencv_noted = False
         self._device_checked = False
+        self._source_lock = threading.RLock()
         self.paths = Paths.for_profile(self.io.profile_dir()).ensure()
         self.settings = Settings.load(self.paths.config)
+        if self.settings.remote_fibo:
+            self.settings.autostart = False
+            self.settings.backend = "comfyui"
+            self.settings.url = get_source(self.settings.fibo_source).url
         self.log = get_logger(self.paths.log, debug=self.settings.debug)
         if self.settings.load_problem:
             self.log.warning("settings: %s", self.settings.load_problem)
@@ -119,6 +126,13 @@ class App:
                 pass
         self.server = ServerManager(self.settings, self.paths, self.log)
         self.plugin_dir = Path(__file__).resolve().parent.parent
+        self.remote_models = None
+        if self.settings.remote_fibo:
+            from .remote_models import RemoteModels
+
+            self.remote_models = RemoteModels(self.settings.url, source_label=self.source_label())
+            self.catalog = self.remote_models.refresh()
+            return
         try:
             self.catalog = cat.load_merged(plugin_dir=self.plugin_dir, base=self.paths.base)
         except cat.CatalogError as err:
@@ -149,13 +163,51 @@ class App:
 
     # backend -------------------------------------------------------------
 
+    def source_label(self) -> str:
+        return get_source(self.settings.fibo_source).label
+
+    def select_source(self, source_id: str) -> Source:
+        """Persist a source and discard old-host state; the caller guards active operations.
+
+        No network work happens here. An explicit check connects/discovers the
+        chosen host, while an unavailable host stays selected without fallback.
+        The model preference is retained so it can be reused wherever available.
+        """
+        if not self.settings.remote_fibo:
+            raise BackendError("Backend source selection is only available in remote edit mode.")
+        source = get_source(source_id)
+        from .remote_models import RemoteModels
+
+        with self._source_lock:
+            selected = replace(self.settings, fibo_source=source.id, url=source.url,
+                               autostart=False, backend="comfyui")
+            try:
+                selected.save(self.paths.config)
+            except OSError as err:
+                raise BackendError(f"The source could not be saved: {err}") from err
+            # ServerManager holds this same settings instance.
+            self.settings.__dict__.update(selected.__dict__)
+            self.remote_models = RemoteModels(source.url, source_label=source.label)
+            self.catalog = []
+            self._active_backend = None
+            self._device_checked = False
+            try:
+                self.paths.models_cache.unlink(missing_ok=True)
+            except OSError as err:
+                self.log.warning("old model cache could not be removed: %s", err)
+        self.log.info("Edit source selected: %s at %s", source.label, source.url)
+        return source
+
     def backend(self, progress=None, cancel=None) -> Backend:
         url = self.server.ensure_running(progress, cancel)
         timeout = float(self.settings.request_timeout or 0)
         if self.settings.backend == "a1111":
             return A1111Backend(url, timeout, self.log)
         self._check_device(url)
-        return ComfyBackend(url, request_timeout=timeout, logger=self.log, models_root=self.models_root)
+        backend = ComfyBackend(url, request_timeout=timeout, logger=self.log,
+                               models_root=None if self.settings.remote_fibo else self.models_root)
+        self._active_backend = backend
+        return backend
 
     def _check_device(self, url: str) -> None:
         """Log the device ComfyUI computes on; when it is the processor, say so loudly
@@ -232,6 +284,14 @@ class App:
     def resolve_model(self, choice: str | None) -> tuple[cat.ModelEntry | None, ModelSpec]:
         """Map a dialog choice ('active', a legacy tier or a catalog id) to a model."""
         self.require_backend_install()
+        if self.settings.remote_fibo:
+            self.refresh_remote_models(force=True)
+            model_id = self.active_model_id() if choice in (None, "", "active") else str(choice)
+            try:
+                entry = cat.by_id(self.catalog, model_id)
+            except cat.CatalogError:
+                raise ModelMissing(self.remote_models.error or f"Choose an available edit model on {self.source_label()}.") from None
+            return entry, cat.model_spec_for(entry)
         choice = (choice or "active").strip()
         if choice == "active":
             model_id = self.active_model_id()
@@ -334,6 +394,12 @@ class App:
             self.log.warning("could not queue the live-preview file: %s", err)
 
     def profile_for(self, model: ModelSpec) -> geometry.ModelProfile:
+        if model.arch == "fibo2":
+            return geometry.ModelProfile("fibo2", min_side=768, max_side=1024, min_context=256, multiple=16)
+        if model.effective_template == QWEN21_EDIT_TEMPLATE:
+            return geometry.ModelProfile("qwen21", min_side=768, max_side=1024, min_context=256, multiple=32)
+        if model.effective_template in ("sdxl_edit", "sdxl_inpaint_edit"):
+            return geometry.ModelProfile("sdxl", min_side=768, max_side=1024, min_context=256, multiple=8)
         base = geometry.PROFILES.get(model.arch, geometry.SD15)
         if model.arch == "sd15":
             max_side = self.settings.max_side_sd15
@@ -346,7 +412,19 @@ class App:
     def sampling(self, model: ModelSpec, variations: int, seed: int, denoise: float | None = None) -> Sampling:
         steps, cfg = int(self.settings.steps), float(self.settings.cfg)
         sampler, scheduler = self.settings.sampler, self.settings.scheduler
-        if model.arch == "flux":
+        if model.arch == "fibo2":
+            turbo = "turbo" in model.unet.lower()
+            cfg, sampler, scheduler, steps = (1.0 if turbo else 5.0), "euler", "simple", (4 if turbo else 30)
+            denoise = 1.0
+        elif model.effective_template == QWEN21_EDIT_TEMPLATE:
+            # Stock ComfyUI Qwen Image 2.1 Edit uses 25 Euler/simple steps.
+            # The Lightning variant supplies its own four-sigma schedule.
+            steps, cfg, sampler, scheduler, denoise = (4 if model.qwen21_lightning else 25), 1.0, "euler", "simple", 1.0
+        elif model.effective_template in ("sdxl_edit", "sdxl_inpaint_edit"):
+            cfg, sampler, scheduler, steps = 6.0, "dpmpp_2m", "karras", 25
+            if denoise is None:
+                denoise = 0.75 if model.effective_template == "sdxl_edit" else 1.0
+        elif model.arch == "flux":
             cfg, sampler, scheduler, steps = 30.0, "euler", "normal", max(20, min(steps, 30))
         elif model.effective_template == "sdxl_eraser":
             # RORem's own settings: no classifier-free guidance, 15 to 50 steps.
@@ -368,6 +446,11 @@ class App:
         """With the managed ComfyUI backend, a missing ComfyUI folder is the real
         problem; report it before any model check (which would otherwise say a
         model is missing). A server that answers anyway (started by hand) is fine."""
+        if self.settings.remote_fibo:
+            self.refresh_remote_models()
+            if not self.catalog:
+                raise BackendUnavailable(self.remote_models.error or f"ComfyUI on {self.source_label()} is unavailable.")
+            return
         if self.settings.backend != "comfyui" or comfy_layout(self.settings.comfy_dir) is not None:
             return
         if ComfyClient(self.server.url(), timeout=3).is_alive(timeout=2.0):
@@ -382,7 +465,8 @@ class App:
         active = self.active_model_id()
         rows = []
         for e in self.catalog:
-            st = cat.install_status(e, self.models_root, self.custom_nodes_dir, self.catalog, server_files)
+            st = (cat.InstallStatus(True, seen_by_server=True) if self.settings.remote_fibo
+                  else cat.install_status(e, self.models_root, self.custom_nodes_dir, self.catalog, server_files))
             label = st.label
             if label == "Available" and e.gated and not self.settings.hf_token:
                 label = "Needs token"
@@ -398,7 +482,7 @@ class App:
                     "license": e.license_name,
                     "license_url": e.license_url,
                     "page": e.page,
-                    "source": "first-party" if e.source_type == "first-party" else "community quant",
+                    "source": "existing checkpoint" if self.settings.remote_fibo and e.arch == "sdxl" else ("first-party" if e.source_type == "first-party" else "community quant"),
                     "uploader": e.uploader,
                     "gated": e.gated,
                     "runnable": e.runnable,
@@ -410,6 +494,7 @@ class App:
                     "capabilities": list(e.capabilities),
                     "template": e.template or "",
                     "seen_by_server": st.seen_by_server,
+                    "remote": self.settings.remote_fibo,
                 }
             )
         return rows
@@ -437,16 +522,43 @@ class App:
 
     def has_model_for(self, operation: str) -> bool:
         """True when a downloaded model can run ``operation`` (fill, expand, txt2img, remove, edit)."""
-        return bool(cat.runnable_installed(self.catalog, self.models_root, self.custom_nodes_dir, operation))
+        return bool(self.installed_models(operation))
 
     def installed_models(self, operation: str = "remove") -> list[cat.ModelEntry]:
         """Installed models that can run ``operation`` ("remove" lists every runnable one)."""
+        if self.settings.remote_fibo:
+            self.refresh_remote_models()
+            return [e for e in self.catalog if operation in e.capabilities]
         return cat.runnable_installed(self.catalog, self.models_root, self.custom_nodes_dir, operation)
 
     def active_model_id(self) -> str:
         """The model a dialog's "active model" means: the one set active by hand,
         else the automatic default among the installed models ("" for none)."""
+        if self.settings.remote_fibo:
+            self.refresh_remote_models()
+            ids = [e.id for e in self.catalog]
+            if (self.settings.active_model.startswith("remote-fibo2-") and
+                    self.settings.active_model.endswith("-heretic")):
+                # An unavailable optional encoder must not silently become the
+                # original encoder when changing hosts or refreshing the list.
+                return self.settings.active_model
+            return self.settings.active_model if self.settings.active_model in ids else (ids[0] if ids else "")
         return cat.effective_active(self.catalog, self.models_root, self.custom_nodes_dir, self.settings.active_model)
+
+    def refresh_remote_models(self, force: bool = False) -> None:
+        with self._source_lock:
+            remote = self.remote_models
+        if remote is not None:
+            entries = remote.refresh(force=force)
+            with self._source_lock:
+                # A slow response from the previously selected host must not
+                # replace the new host's catalog after a source switch.
+                if self.remote_models is remote:
+                    self.catalog = entries
+
+    def _require_local_management(self) -> None:
+        if self.settings.remote_fibo:
+            raise BackendError(f"Models and ComfyUI are managed on {self.source_label()}. OpenFill only submits edits.")
 
     def tier_model_id(self, tier: str, operation: str = "fill") -> str:
         """The installed default of ``tier`` (fast, quality, remove), else the
@@ -464,6 +576,7 @@ class App:
         return cat.NO_MODEL_MESSAGE
 
     def queue_download(self, model_id: str, include_dependencies: bool = True) -> list[str]:
+        self._require_local_management()
         entry = cat.by_id(self.catalog, model_id)
         if cat.gated_files_missing(entry, self.models_root) and not self.settings.hf_token:
             pages = ", ".join(cat.login_pages(entry, self.models_root)) or entry.page
@@ -505,6 +618,7 @@ class App:
         return ids
 
     def queue_node_install(self, model_id: str) -> str | None:
+        self._require_local_management()
         entry = cat.by_id(self.catalog, model_id)
         layout = comfy_layout(self.settings.comfy_dir)
         if layout is None:
@@ -524,6 +638,7 @@ class App:
 
     def queue_opencv_install(self) -> str | None:
         """Queue the pinned OpenCV for ComfyUI's interpreter, unless it is already queued or running."""
+        self._require_local_management()
         layout = comfy_layout(self.settings.comfy_dir) if self.settings.comfy_dir else None
         packages = list(comfy_setup.load_manifest().pip)
         if layout is None or not packages:
@@ -552,6 +667,7 @@ class App:
         return [n for n in entry.requires_nodes if cat.node_missing(self.custom_nodes_dir, n)]
 
     def remove_model(self, model_id: str) -> str:
+        self._require_local_management()
         entry = cat.by_id(self.catalog, model_id)
         shared = {
             f.dest
@@ -578,6 +694,9 @@ class App:
 
     def comfy_ready(self) -> bool:
         """True when a ComfyUI folder is configured and usable, or a server already answers."""
+        if self.settings.remote_fibo:
+            self.refresh_remote_models()
+            return bool(self.catalog)
         if self.settings.backend != "comfyui" or comfy_layout(self.settings.comfy_dir) is not None:
             return True
         return ComfyClient(self.server.url(), timeout=3).is_alive(timeout=2.0)
@@ -585,10 +704,24 @@ class App:
     def reload_settings(self) -> None:
         """Re-read config.json (the setup task changes comfy_dir in another process)."""
         fresh = Settings.load(self.paths.config, backup=False)
-        self.settings.__dict__.update(fresh.__dict__)
+        with self._source_lock:
+            self.settings.__dict__.update(fresh.__dict__)
+            if self.settings.remote_fibo:
+                from .remote_models import RemoteModels
+
+                source = get_source(self.settings.fibo_source)
+                self.settings.autostart = False
+                self.settings.backend = "comfyui"
+                self.settings.url = source.url
+                if self.remote_models is None or self.remote_models.url != source.url:
+                    self.remote_models = RemoteModels(source.url, source_label=source.label)
+                    self.catalog = []
+                    self._active_backend = None
+                    self._device_checked = False
 
     def use_comfy_dir(self, path: str) -> None:
         """Make ``path`` the ComfyUI folder; raises ``BackendError`` when it holds no ComfyUI."""
+        self._require_local_management()
         if comfy_layout(path) is None:
             raise BackendError(
                 f"{comfy_problem(path)} Choose the folder that holds python_embeded and ComfyUI "
@@ -622,6 +755,7 @@ class App:
     ) -> str:
         """Queue the download and install of the pinned ComfyUI as a background task (``amd``:
         ComfyUI's build for AMD cards; ``older_gpu``: the build for older NVIDIA cards)."""
+        self._require_local_management()
         return self.server.queue_task(
             {
                 "type": "setup_comfy",
@@ -703,7 +837,7 @@ class App:
         prompt: str,
         negative: str,
         variations: int,
-        strength: float,
+        strength: float | None,
         seed: int,
         model_choice: str,
         remove: bool = False,
@@ -715,6 +849,8 @@ class App:
         # selection there is nothing to fill, and filling the whole image is never
         # what was meant.
         self._check_image(image)
+        if self.settings.remote_fibo and (remove or not prompt.strip()):
+            raise BackendError("Describe the desired edit or selected content. Select All to edit the whole image.")
         selection = self.io.selection_rect(image)
         if selection is None:
             self.log.info("fill: refused, nothing selected")
@@ -735,6 +871,19 @@ class App:
                     model_choice,
                 )
         entry, model = self.resolve_model(model_choice)
+        selection_edit = model.effective_template in workflow.SELECTION_EDIT_TEMPLATES
+        fibo_edit = model.effective_template == "fibo2_edit"
+        # Options saved while this job runs apply to the next edit. Freeze all
+        # context/mode/blend values before exporting pixels or entering inference.
+        fibo_mode = self.settings.fibo_edit_mode
+        fibo_context_mode = self.settings.fibo_context_mode
+        fibo_context_percent = float(self.settings.fibo_context_percent)
+        boundary_strength = (float(self.settings.fibo_boundary_strength) / 100.0
+                             if fibo_edit and self.settings.fibo_boundary_match else 0.0)
+        auto_feather = self.settings.auto_feather
+        auto_feather_percent = self.settings.auto_feather_percent
+        if strength is None:
+            strength = self.sampling(model, variations, seed).denoise
         profile = self.profile_for(model)
         full = self.io.image_rect(image)
         target = selection
@@ -750,12 +899,13 @@ class App:
             profile,
             model.arch,
             removal_intent,
-            geometry.fill_padding(removal_intent, model.prompt_free),
+            (fibo_context_percent / 100.0 if fibo_edit
+             else geometry.fill_padding(removal_intent, model.prompt_free)),
             refine=refine,
-            layout=float(self.settings.tile_denoise) < 1.0,
+            layout=False if selection_edit else float(self.settings.tile_denoise) < 1.0,
             layout_min_scale=float(self.settings.layout_min_scale),
             # Erasers work at full image resolution, in tiles of their own working size.
-            min_scale=1.0 if model.eraser else None,
+            min_scale=0.0 if selection_edit else (1.0 if model.eraser else None),
         )
         if model.native_lama:
             # LaMa at the image's own pixels: OpenFill's node fits it to the graphics memory.
@@ -766,6 +916,17 @@ class App:
             )
             plan = tiled or plan
         ctx, ws = plan.context, plan.work
+        if fibo_edit:
+            if fibo_context_mode == "full":
+                ctx = full
+            # Both FIBO edit modes use the native ~1MP reference dimensions.
+            # Pre-resizing without cropping keeps multi-reference guides aligned.
+            ww, wh = workflow.fibo_trained_size(ctx.width, ctx.height)
+            ws = geometry.WorkingSize(ww, wh, min(ww / ctx.width, wh / ctx.height))
+            plan = replace(plan, context=ctx, work=ws)
+        elif model.effective_template == QWEN21_EDIT_TEMPLATE:
+            ww, wh = workflow.qwen21_reference_size(ctx.width, ctx.height)
+            ws = geometry.WorkingSize(ww, wh, min(ww / ctx.width, wh / ctx.height))
         mp = geometry.mask_params(
             target,
             ws.scale,
@@ -777,6 +938,8 @@ class App:
         layer_grow = geometry.layer_mask_grow(mp, removal_intent)
         color_match = geometry.color_match_strength(target, ctx, full, removal_intent)
         prefill_style, prefill_mode = geometry.prefill_for(removal_intent, strength, model.arch)
+        if selection_edit:
+            layer_grow, color_match = 0, 0.0
         if model.prompt_free:
             prompt, negative = "", ""
         elif model.eraser:
@@ -824,13 +987,31 @@ class App:
             )
         image_png, image_rgba = self.io.export_region(image, ctx)
         mask_png, mask_raw = self.io.export_selection_mask(image, ctx)
-        if self.settings.scene_caption and not removal_intent and not model.prompt_free:
+        layer_mask = None
+        if selection_edit and auto_feather and auto_feather_percent > 0:
+            from .auto_feather import feather_selection
+
+            # Capture one immutable mask for both graph support and the final
+            # result layer. The graph keeps hard support; PhotoCraft blends its
+            # soft alpha once, with no additional layer grow/feather operation.
+            mask_raw = feather_selection(
+                mask_raw, ctx.width, ctx.height, auto_feather_percent,
+                canvas_edges=(ctx.x <= full.x, ctx.y <= full.y,
+                              ctx.x + ctx.width >= full.x + full.width,
+                              ctx.y + ctx.height >= full.y + full.height),
+            )
+            layer_mask = mask_raw
+            mask_png = png.encode(ctx.width, ctx.height, mask_raw, 1)
+        if self.settings.scene_caption and not removal_intent and not model.prompt_free and not selection_edit:
             sw, sh, small = caption.sample(ctx.width, ctx.height, image_rgba, 4)
             _, _, small_mask = caption.sample(ctx.width, ctx.height, mask_raw, 1)
             description = caption.describe(sw, sh, small, 4, small_mask)
             if description:
                 prompt = caption.augment(prompt, description)
                 self.log.info("fill: scene description added: %s", description)
+        sampling = self.sampling(model, variations, seed, strength)
+        if fibo_edit and fibo_mode == "preserve":
+            sampling = replace(sampling, denoise=0.75)
         request = workflow.PlannedInpaintRequest(
             image_png=image_png,
             mask_png=mask_png,
@@ -841,7 +1022,7 @@ class App:
             prompt=prompt,
             negative=negative,
             model=model,
-            sampling=self.sampling(model, variations, seed, strength),
+            sampling=sampling,
             mode="fill",
             grow=mp.grow_work,
             feather=mp.blur_work,
@@ -849,6 +1030,7 @@ class App:
             prefill_style=prefill_style,
             prefill_mode=prefill_mode,
             color_match=color_match,
+            fibo_edit_mode=fibo_mode if fibo_edit else "preserve",
             tiles=plan.tiles,
             refine_tiles=plan.refine_tiles,
             refine_denoise=float(self.settings.refine_denoise),
@@ -871,21 +1053,26 @@ class App:
             self.server.touch()
             self._after_generation(result)
             self._debug_dump("fill", request, result, ctx)
+            layer_options = {"grow": layer_grow}
+            if layer_mask is not None:
+                layer_options["mask_pixels"] = layer_mask
             layers = self.io.insert_results(
                 image,
                 result.images,
                 ctx,
                 name,
-                float(mp.feather_image),
+                0.0 if selection_edit else float(mp.feather_image),
                 self.paths.temp,
-                grow=layer_grow,
+                **layer_options,
             )
         except BaseException as err:
             runner.fail(err)
             raise
-        if self.settings.seam_correction and not model.prompt_free:
+        if boundary_strength:
+            self._match_fibo_boundary(image, layers, ctx, image_rgba, mask_raw, boundary_strength)
+        if self.settings.seam_correction and not model.prompt_free and not selection_edit:
             self._correct_seams(image, layers, ctx, image_rgba, mask_raw, layer_grow)
-        if self.settings.grain_match and not model.prompt_free:
+        if self.settings.grain_match and not model.prompt_free and not selection_edit:
             self._match_grain(image, layers, ctx, image_rgba, mask_raw, result.seed)
         if len(layers) > 1 and self.settings.rank_variations:
             layers = self._rank_variations(
@@ -894,6 +1081,23 @@ class App:
         runner.done(f"Added layer: {layers[0].get_name()}" if layers else "Done")
         self.log.info("fill: done, seed=%s, %d layer(s)", result.seed, len(layers))
         return layers
+
+    def _match_fibo_boundary(self, image, layers, ctx, original, mask, strength):
+        """Apply optional conservative color correction before pending layers commit."""
+        from .boundary_match import match_boundary
+
+        try:
+            for layer in layers:
+                if (layer.get_width(), layer.get_height()) != ctx.size:
+                    continue
+                pixels = self.io.layer_rgba(layer)
+                corrected = match_boundary(ctx.width, ctx.height, original, pixels, mask, strength)
+                if corrected != pixels:
+                    self.io.set_layer_rgba(layer, corrected)
+            self.log.info("fill: boundary color matching strength=%.2f", strength)
+        except Exception as err:
+            # A cosmetic failure must not lose a successful generated layer.
+            self.log.warning("fill: boundary color matching skipped: %s", err)
 
     def _correct_seams(
         self,
@@ -1308,6 +1512,18 @@ class App:
             self.log.warning("debug dump failed: %s", err)
 
     def check_backend(self) -> HealthStatus:
+        if self.settings.remote_fibo:
+            # An explicit Check may recreate a dropped tunnel. Periodic model
+            # discovery remains read-only and never spawns connection processes.
+            from openfill_photocraft.comfy_connection import ensure_connection
+
+            try:
+                ensure_connection(self.settings.url, self.paths.base.parent, source_id=self.settings.fibo_source)
+            except Exception as err:
+                return HealthStatus(False, str(err))
+            self.refresh_remote_models(force=True)
+            if not self.catalog:
+                return HealthStatus(False, self.remote_models.error)
         try:
             backend = self.backend(self.io.GimpProgress("Checking the AI backend"))
         except BackendError as err:
@@ -1317,6 +1533,8 @@ class App:
         return health
 
     def stop_backend(self) -> str:
+        if self.settings.remote_fibo:
+            return f"{self.source_label()}'s ComfyUI is managed separately and stays running."
         state = self.server.read_state()
         if not state:
             return "No managed backend is running."

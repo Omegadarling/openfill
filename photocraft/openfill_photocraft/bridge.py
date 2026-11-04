@@ -750,6 +750,9 @@ class PhotoCraftBridge:
 
 def default_profile() -> Path:
     """Where the companion keeps settings, logs and the exchange folder."""
+    override = os.environ.get("OPENFILL_PHOTOCRAFT_PROFILE")
+    if override:
+        return Path(override).expanduser().resolve()
     if sys.platform == "win32":
         base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
         return base / "OpenFill for PhotoCraft"

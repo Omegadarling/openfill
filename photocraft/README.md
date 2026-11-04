@@ -4,6 +4,33 @@ Generative Fill, Remove object, Generative Expand and Text to Image for [PhotoCr
 
 It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharriman/openfill#install): the same models, model manager, mask handling, seam correction and variations. Only the connection to the editor is different.
 
+The portable development branch adds Qwen Image 2.1 and FIBO editing through an existing local ComfyUI. Build its installer ZIP from the repository root with `python tools/make_photocraft_zip.py`. The upstream release downloads below contain the upstream version.
+
+## Edit with an existing ComfyUI
+
+1. Start ComfyUI on `http://127.0.0.1:8188` and install compatible model files in its model folders.
+2. Close OpenFill. In your PhotoCraft profile's `openfill/config.json`, set `"remote_fibo": true` and `"fibo_source": "local"`. Keep any other settings in the file. See [Good to know](#good-to-know) for the profile location.
+3. Reopen PhotoCraft through OpenFill, select the area you want to edit, and choose a model under **Image Edit**. Use Select All for a whole-image edit.
+
+The dropdown lists compatible models reported by the running server. Existing-server mode uses your ComfyUI process without managing its lifecycle. To return to the standard managed engine, set `"remote_fibo": false` while the companion is closed.
+
+Qwen 2.1 uses `qwen3vl_8b_fp8_scaled.safetensors` in `models/text_encoders` and `qwen_image_2.1_vae_bf16.safetensors` in `models/vae`. Put one or both diffusion checkpoints in `models/diffusion_models`.
+
+| Model | Diffusion filename | Sampler |
+| --- | --- | --- |
+| Qwen Image 2.1 | `qwen_image_2.1_bf16.safetensors` | 25 Euler steps at CFG 1 |
+| Qwen Image 2.1 Lightning v2 RL | `qwen_image_2.1_lightning_v2_rl_bf16.safetensors` | Four Euler steps using the published sigma schedule |
+
+The Qwen Image 2.1 release provides the full BF16 model and VAE. The encoder comes from the Comfy-Org Qwen3-VL release. Use a recent ComfyUI with the native Qwen 2.1 nodes. [Model files](https://huggingface.co/Comfy-Org/Qwen-Image-2.1) · [Encoder files](https://huggingface.co/Comfy-Org/Qwen3-VL) · [ComfyUI guide](https://docs.comfy.org/tutorials/image/qwen/qwen-image-2-1)
+
+For Lightning v2 RL, download the pinned full FP32 transformer and convert it with the optional tool in this checkout. Run the tool with a Python environment that already has NumPy, such as the ComfyUI virtual environment. [LightX2V model and license](https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning-v2-RL/tree/682b2529ffb5ae9ba39ceb81a31ce99e602da2ee)
+
+```text
+python tools/convert_qwen21_lightning.py diffusion_pytorch_model.safetensors qwen_image_2.1_lightning_v2_rl_bf16.safetensors
+```
+
+Both Qwen variants return a masked layer and preserve pixels outside the selection. Leave room in the selection for inserted objects and their shadows. A tight selection can clip the generated object.
+
 <img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 
 > **Version 0.2.4** fixes Mac prompt typing and model-menu focus, and lets you reuse ComfyUI's Python with the fallback panel in your default browser. It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. The Mac version passed Fill, Remove, Expand and Create on an M3 MacBook Air; see [the test results](../docs/evidence/macos-photocraft-2026-10-26/).

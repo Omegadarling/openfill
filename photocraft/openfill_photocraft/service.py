@@ -46,6 +46,7 @@ class JobState:
     preview_seq: int = 0
     preview_rect: tuple[int, int, int, int] | None = None  # the region a preview frame shows (job's first canvas)
     cancel_requested: bool = False
+    committing: bool = False  # the final PhotoCraft history operation cannot be cancelled halfway
     variations: list[str] = field(default_factory=list)  # names, best first
     shown: int = 0
     notices: list[str] = field(default_factory=list)
@@ -67,6 +68,7 @@ class JobState:
                 "variations": list(self.variations),
                 "shown": self.shown,
                 "notices": list(self.notices[-5:]),
+                "committing": self.committing,
             }
 
 
@@ -132,6 +134,8 @@ class Service:
         self.app.server.watch_pid = os.getpid()
         self.app.server.watch_name = process_name(os.getpid()) or "python"
         self._thread: threading.Thread | None = None
+        self._operation_lock = threading.Lock()
+        self._switching = False
         self.watcher = None  # menu.Watcher, set by the launcher: keeps the document's facts current
         self.engine = ""  # "" not started by us, "starting", "ready", or why it failed
         self._warm: threading.Thread | None = None
@@ -150,6 +154,8 @@ class Service:
         from openfill.comfy_setup import detect_comfy
         from openfill.config import comfy_layout
 
+        if self.app.settings.remote_fibo:
+            return
         if comfy_layout(self.app.settings.comfy_dir) is not None:
             return
         for folder in gimp_comfy_dirs():
@@ -170,6 +176,9 @@ class Service:
         from openfill import local_models
 
         app = self.app
+        if app.settings.remote_fibo:
+            app.refresh_remote_models(force=True)
+            return
         try:
             entries = cat.load_merged(plugin_dir=app.plugin_dir, base=app.paths.base)
             found, _skipped = local_models.scan(app.models_root, entries, app.paths.base)
@@ -238,9 +247,51 @@ class Service:
     # jobs -------------------------------------------------------------------------------
 
     def busy(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        return getattr(self, "_switching", False) or (self._thread is not None and self._thread.is_alive())
+
+    def select_source(self, source_id: str) -> dict[str, Any]:
+        """Change destinations only between edits, including the connection check."""
+        if not self._operation_lock.acquire(blocking=False):
+            raise RuntimeError("A source change or connection check is already running.")
+        try:
+            if self.busy():
+                raise RuntimeError("Wait for the current edit to finish before changing its source.")
+            self._switching = True
+            source = self.app.select_source(source_id)
+            self.engine = ""
+            health = self.app.check_backend()
+            return {"source": source.id, "name": source.label, "ok": health.ok,
+                    "detail": health.detail, "device": getattr(health, "device", "")}
+        finally:
+            self._switching = False
+            self._operation_lock.release()
+
+    def check_backend(self):
+        if not self._operation_lock.acquire(blocking=False):
+            raise RuntimeError("A source change or connection check is already running.")
+        try:
+            if self.busy():
+                raise RuntimeError("Wait for the current edit to finish before checking its source.")
+            self._switching = True
+            return self.app.check_backend()
+        finally:
+            self._switching = False
+            self._operation_lock.release()
 
     def start(self, kind: str, params: dict[str, Any]) -> None:
+        if not self._operation_lock.acquire(blocking=False):
+            raise RuntimeError("Wait for the source connection check to finish.")
+        try:
+            self._start(kind, params)
+        finally:
+            self._operation_lock.release()
+
+    def _start(self, kind: str, params: dict[str, Any]) -> None:
+        if self.app.settings.remote_fibo:
+            if kind != "fill" or params.get("remove"):
+                raise RuntimeError("This integration supports prompted editing. Use Edit with a selection, or Select All.")
+            if not str(params.get("prompt", "")).strip():
+                raise RuntimeError("Describe the desired edit or selected content.")
         if self.busy():
             raise RuntimeError("A job is already running.")
         with self.state.lock:
@@ -253,6 +304,7 @@ class Service:
             self.state.model = ""
             self.state.fraction, self.state.started, self.state.finished = 0.0, time.time(), 0.0
             self.state.cancel_requested, self.state.variations, self.state.shown = False, [], 0
+            self.state.committing = False
             self.state.preview, self.state.preview_seq = b"", self.state.preview_seq + 1
             self.state.preview_rect = None
         self._thread = threading.Thread(target=self._job, args=(kind, params), name="openfill-job", daemon=True)
@@ -260,7 +312,17 @@ class Service:
 
     def cancel(self) -> None:
         with self.state.lock:
-            self.state.cancel_requested = True
+            committing = self.state.committing
+            if not committing:
+                self.state.cancel_requested = True
+        if committing:
+            self._notice("The result is being added to PhotoCraft. Use Undo when it finishes to remove the edit.")
+            return
+        if self.app.settings.remote_fibo:
+            backend = getattr(self.app, "_active_backend", None)
+            if backend is not None:
+                backend.cancel()
+            return  # never interrupt another backend user or clear its shared queue
         try:
             self.app.server.request_cancel()
         except Exception:  # noqa: BLE001
@@ -299,7 +361,7 @@ class Service:
                     str(p.get("prompt", "")),
                     str(p.get("negative", "")),
                     variations,
-                    float(p.get("strength", 1.0)),
+                    None if self.app.settings.remote_fibo and p.get("strength") is None else float(p.get("strength", 1.0)),
                     seed,
                     model,
                     remove=bool(p.get("remove")),
@@ -334,6 +396,7 @@ class Service:
                 raise RuntimeError(f"unknown job {kind}")
             done_text = self.state.text or "Done"
             if image is not None:
+                self._begin_commit()
                 with self.state.lock:
                     self.state.text = "Adding the result to PhotoCraft..."
                 self.bridge.finish(image)  # the results reach the document here, in one step
@@ -361,6 +424,14 @@ class Service:
                 self.bridge.discard(image)  # whatever did not reach the document is dropped
             with self.state.lock:
                 self.state.finished = time.time()
+                self.state.committing = False
+
+    def _begin_commit(self) -> None:
+        """Atomically accept a late cancel or enter the indivisible history commit."""
+        with self.state.lock:
+            if self.state.cancel_requested:
+                raise GenerationCancelled("cancelled before the result was added to PhotoCraft")
+            self.state.committing = True
 
     # Remove values of older menus (saved in the panel's settings): LaMa or MAT alone, and the
     # two-pass "LaMa + a generation model", which LaMa at full resolution replaced.
@@ -409,6 +480,7 @@ class Service:
         }
 
     def setup_comfy(self) -> str:
+        self.app._require_local_management()
         """Download and install ComfyUI's portable build (the version OpenFill for GIMP
         installs, checked against its SHA-256) as a background task. The supervisor saves the
         folder in the settings when it is done (see ``setup_progress``)."""
