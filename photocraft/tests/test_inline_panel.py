@@ -195,6 +195,63 @@ class InlinePanelTests(unittest.TestCase):
         bar.references._remove(bar.references.rows[0]["id"])
         self.assertEqual([r["name"] for r in bar.references.rows], ["first.png"])
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows shell file drops")
+    def test_native_windows_file_drop_adds_ordered_unicode_paths(self):
+        import ctypes as ct
+        from ctypes import wintypes as wt
+
+        class DropFiles(ct.Structure):
+            _fields_ = [("pFiles", wt.DWORD), ("pt", wt.POINT), ("fNC", wt.BOOL), ("fWide", wt.BOOL)]
+
+        user = ct.WinDLL("user32", use_last_error=True)
+        memory = ct.WinDLL("kernel32", use_last_error=True)
+        post = user.PostMessageW
+        post.argtypes, post.restype = (wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM), wt.BOOL
+        user.GetWindowLongW.argtypes, user.GetWindowLongW.restype = (wt.HWND, ct.c_int), wt.LONG
+        memory.GlobalAlloc.argtypes, memory.GlobalAlloc.restype = (wt.UINT, ct.c_size_t), wt.HGLOBAL
+        memory.GlobalLock.argtypes, memory.GlobalLock.restype = (wt.HGLOBAL,), ct.c_void_p
+        memory.GlobalUnlock.argtypes, memory.GlobalUnlock.restype = (wt.HGLOBAL,), wt.BOOL
+        memory.GlobalFree.argtypes, memory.GlobalFree.restype = (wt.HGLOBAL,), wt.HGLOBAL
+
+        bar = self.bar
+        target = bar.references.add.winfo_id()
+        self.assertEqual(bar.references.add.cget_text(), "Drop images here or click to add")
+        self.assertTrue(user.GetWindowLongW(target, -20) & 0x10)  # WS_EX_ACCEPTFILES
+        files = [self.profile / "参考 2.png", self.profile / "café 1.png"]
+        for path, color in zip(files, ("red", "blue"), strict=False):
+            Image.new("RGB", (16, 24), color).save(path)
+
+        def drop(paths):
+            header = DropFiles(ct.sizeof(DropFiles), wt.POINT(4, 4), False, True)
+            payload = bytes(header) + ("\0".join(map(str, paths)) + "\0\0").encode("utf-16-le")
+            handle = memory.GlobalAlloc(2, len(payload))  # GMEM_MOVEABLE
+            self.assertTrue(handle)
+            address = memory.GlobalLock(handle)
+            if not address:
+                memory.GlobalFree(handle)
+                raise ct.WinError(ct.get_last_error())
+            ct.memmove(address, payload, len(payload))
+            memory.GlobalUnlock(handle)
+            if not post(target, 0x0233, handle, 0):  # WM_DROPFILES; receiver owns the handle after posting
+                memory.GlobalFree(handle)
+                raise ct.WinError(ct.get_last_error())
+            bar.root.update()
+
+        drop(files)
+        for _ in range(2):  # native handoff, then the background image decoder's completion
+            callback, args = bar.calls.get(timeout=5)
+            callback(*args)
+        self.assertEqual([row["name"] for row in bar.references.rows], [path.name for path in files])
+        self.service.add_reference_files.assert_called_once_with(tuple(map(str, files)))
+
+        bar.model_choice.set(self.sdxl_name)
+        bar._fill_models()
+        drop(files[:1])
+        callback, args = bar.calls.get(timeout=5)
+        callback(*args)
+        self.service.add_reference_files.assert_called_once()
+        self.assertIn("Choose a Qwen or FIBO", bar.references.note.cget("text"))
+
     def test_generate_and_prompt_enter_submit_latest_controls(self):
         bar = self.bar
         view = bar.settings_view.generation

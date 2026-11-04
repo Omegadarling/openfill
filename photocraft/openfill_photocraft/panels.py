@@ -348,6 +348,16 @@ class ReferenceView(tk.Frame):
         self.add = ui.Button(self, "Add reference images", self._choose, "secondary")
         self.add.pack(anchor="w", pady=(8, 0))
         self.note = ui.small(self, "", BAD)
+        from .file_drop import accept_file_drops
+        from .references import MAX_REFERENCES
+
+        if accept_file_drops(
+            self.add,
+            lambda paths: bar.call_soon(self._add_files, paths),
+            lambda message: bar.call_soon(self.say, message),
+            MAX_REFERENCES,
+        ):
+            self.add.set(label="Drop images here or click to add", width=CW)
 
     def say(self, message: str) -> None:
         if message:
@@ -411,9 +421,21 @@ class ReferenceView(tk.Frame):
             title="Add reference images",
             filetypes=(("Images", ("*.png", "*.jpg", "*.jpeg", "*.webp")), ("All files", "*.*")),
         )
+        self._add_files(paths)
+
+    def _add_files(self, paths: tuple[str, ...]) -> None:
         if not paths:
             return
-        if len(self.rows) + len(paths) > self.limit:
+        if self.bar.service.busy():
+            self.say("Wait for the current edit before adding reference images.")
+            return
+        if self.adding:
+            self.say("Wait for the current reference images to load.")
+            return
+        if not self.limit:
+            self.say("Choose a Qwen or FIBO edit model to attach extra images.")
+            return
+        if len(self.bar.service.reference_rows()) + len(paths) > self.limit:
             self.say(f"This model allows up to {self.limit} additional images.")
             return
         self.adding = True

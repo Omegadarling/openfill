@@ -112,6 +112,8 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .section-body{padding:12px}
 .reference-row{display:flex;gap:6px;align-items:center}
 .reference-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reference-dropzone{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:8px 10px;border:1px dashed var(--line);border-radius:4px}
+.reference-dropzone.file-over{border-color:var(--accent);background:var(--panel)}
 .model-visible{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px}
 .model-visible input{accent-color:var(--accent)}
 #tool-actions{position:sticky;bottom:0;background:var(--bg);z-index:1}
@@ -172,7 +174,10 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     <div id="body-references" class="section-body stack">
       <div id="reference-help" class="small"></div>
       <div id="reference-list" class="stack"></div>
-      <button class="btn" id="add-references">Add reference images…</button>
+      <div class="reference-dropzone" id="reference-dropzone" role="group" aria-label="Add reference images">
+        <span class="small">Drop image files here</span>
+        <button class="btn" id="add-references">Browse…</button>
+      </div>
       <input type="file" id="reference-files" accept="image/png,image/jpeg,image/webp" multiple hidden>
       <div id="reference-note" class="note" role="status" hidden></div>
     </div>
@@ -400,9 +405,10 @@ async function changeReferences(path, body) {
   }
 }
 async function loadReferences() {
+  if (attaching) return;
   try {
     const rows = await get("/api/references");
-    if (Array.isArray(rows) && JSON.stringify(rows) !== JSON.stringify(referenceRows)) {
+    if (!attaching && Array.isArray(rows) && JSON.stringify(rows) !== JSON.stringify(referenceRows)) {
       referenceRows = rows;
       drawReferences();
     }
@@ -456,19 +462,31 @@ function fileData(file) {
   });
 }
 $("add-references").onclick = () => $("reference-files").click();
-$("reference-files").onchange = async event => {
+$("reference-files").onchange = event => {
   const files = [...event.target.files];
   event.target.value = "";
-  if (!files.length) return;
-  if (files.length + referenceRows.length > referenceLimit()) {
+  addReferenceFiles(files);
+};
+async function addReferenceFiles(files) {
+  if (!files.length || attaching) return;
+  const limit = referenceLimit();
+  if (!limit) {
+    referenceNote("Choose a reference-capable edit model first.");
+    return;
+  }
+  if (files.length + referenceRows.length > limit) {
     referenceNote("There are more images than this model can use.");
+    return;
+  }
+  const oversized = files.find(file => file.size > 16 * 1024 * 1024);
+  if (oversized) {
+    referenceNote(oversized.name + " exceeds 16 MB.");
     return;
   }
   attaching = true;
   drawReferences();
   try {
     for (const file of files) {
-      if (file.size > 16 * 1024 * 1024) throw new Error(file.name + " exceeds 16 MB.");
       referenceRows = await post("/api/references", {name: file.name, data: await fileData(file)});
     }
     referenceNote("");
@@ -478,7 +496,35 @@ $("reference-files").onchange = async event => {
     attaching = false;
     drawReferences();
   }
+}
+const referenceDropzone = $("reference-dropzone");
+const isFileDrag = event => Array.from(event.dataTransfer?.types || []).includes("Files");
+function highlightReferenceDrop(event) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const canAdd = !attaching && referenceRows.length < referenceLimit();
+  event.dataTransfer.dropEffect = canAdd ? "copy" : "none";
+  referenceDropzone.classList.toggle("file-over", canAdd);
+}
+referenceDropzone.ondragenter = highlightReferenceDrop;
+referenceDropzone.ondragover = highlightReferenceDrop;
+referenceDropzone.ondragleave = event => {
+  if (!referenceDropzone.contains(event.relatedTarget)) referenceDropzone.classList.remove("file-over");
 };
+referenceDropzone.ondrop = event => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  referenceDropzone.classList.remove("file-over");
+  addReferenceFiles([...event.dataTransfer.files]);
+};
+// A missed file drop should stay in OpenFill instead of navigating to the file.
+for (const type of ["dragover", "drop"]) {
+  document.addEventListener(type, event => {
+    if (isFileDrag(event)) event.preventDefault();
+  });
+}
 
 $("prompt").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();$("go").click()}};
 $("strength").oninput=()=>$("str-v").textContent=(+$("strength").value).toFixed(2);

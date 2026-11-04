@@ -33,7 +33,7 @@ Both Qwen variants return a masked layer and preserve pixels outside the selecti
 
 ### Reference images and panel layout
 
-Choose a reference-capable model and use **Reference Images** to attach PNG, JPEG, or WebP files. The target document is image 1. In a Qwen prompt, use `<image2>`, `<image3>`, and so on for the attachments. FIBO uses `<image_2>`, `<image_3>`, and so on. The reference list shows the current labels and supports reordering and removal. Attachments are kept for the current companion session.
+Choose a reference-capable model and use **Reference Images** to attach PNG, JPEG, or WebP files. Drop files onto the reference drop area in the Windows panel or browser view, or click **Add reference images** to choose them. The target document is image 1. In a Qwen prompt, use `<image2>`, `<image3>`, and so on for the attachments. FIBO uses `<image_2>`, `<image_3>`, and so on. The reference list shows the current labels and supports reordering and removal. Attachments are kept for the current companion session.
 
 Open **Manage Models** to control which models appear in the main dropdown. Click a section header to expand or collapse it, or drag its grip to move the section. OpenFill saves the section order, collapsed state, and model visibility in your profile.
 
