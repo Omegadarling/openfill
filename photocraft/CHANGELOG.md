@@ -5,7 +5,11 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.11.0-portable.1] — Development branch
+## [0.11.1-portable.1] — Development branch
+
+- Make the section disclosure arrows three times larger in the native panel and browser view.
+
+## [0.11.0-portable.1]
 
 - Add new Image Edit and Fill results to the pending choices when you generate again on the same document.
 - Put Keep, Keep all, and Discard below the thumbnails, including when there is only one result.

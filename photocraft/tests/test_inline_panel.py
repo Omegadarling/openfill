@@ -131,6 +131,23 @@ class InlinePanelTests(unittest.TestCase):
         self.assertFalse(new_stack.bodies["edit"].winfo_manager())
         self.assertTrue(new_stack.bodies["references"].winfo_manager())
 
+    def test_disclosure_arrows_are_large_in_both_states(self):
+        stack = self.bar.sections
+        toggle = stack.toggles["edit"]
+        header = stack.headers["edit"]
+        self.assertEqual(int(header.cget("height")), 32)
+        expanded = toggle.cget("image")
+        self.assertEqual(int(toggle.tk.call("image", "width", expanded)), 24)
+        toggle.invoke()
+        collapsed = toggle.cget("image")
+        self.assertNotEqual(collapsed, expanded)
+        self.assertEqual(int(toggle.tk.call("image", "width", collapsed)), 24)
+        self.assertFalse(stack.bodies["edit"].winfo_manager())
+        toggle.invoke()
+        self.assertEqual(toggle.cget("image"), expanded)
+        self.assertTrue(stack.bodies["edit"].winfo_manager())
+        self.assertEqual(int(header.cget("height")), 32)
+
     def test_model_visibility_changes_only_the_dropdown(self):
         bar = self.bar
         self.assertEqual(bar.model_box.values, [self.qwen_name, self.sdxl_name])

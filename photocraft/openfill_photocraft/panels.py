@@ -20,6 +20,8 @@ import threading
 import tkinter as tk
 from typing import TYPE_CHECKING, Any
 
+from PIL import Image, ImageDraw
+
 from openfill.config import FIBO_CONTEXT_MODES, FIBO_EDIT_MODES, validate_fibo_settings
 
 from . import ui
@@ -53,6 +55,7 @@ SECTIONS = {
     "generation": "Generation Settings",
 }
 BUSY = ("Downloading", "Waiting", "Installing", "Removing", "Working")
+DISCLOSURE_SIZE = 24  # Three times the previous 8 px title-font glyph advance.
 
 
 def field(parent: tk.Misc, label: str, control_factory, gap: int = 6) -> tuple[tk.Frame, Any]:
@@ -77,6 +80,11 @@ class SectionStack(tk.Frame):
         self._drag_y = 0
         self._scroll_timer: str | None = None
         self._marker: str | None = None
+        size = DISCLOSURE_SIZE * ui.SS
+        arrow = Image.new("RGBA", (size, size))
+        ImageDraw.Draw(arrow).polygon(((0, 0), (size - 1, size // 2), (0, size - 1)), fill=TEXT)
+        arrow = arrow.resize((DISCLOSURE_SIZE, DISCLOSURE_SIZE), Image.Resampling.BOX)
+        self._arrows = {True: ui.photo(arrow), False: ui.photo(arrow.transpose(Image.Transpose.ROTATE_270))}
         for key in SECTIONS:
             section = self.frames[key] = ui.frame(self)
             header = self.headers[key] = ui.frame(section, PANEL, height=32)
@@ -106,7 +114,10 @@ class SectionStack(tk.Frame):
                 command=lambda name=key: self.toggle(name),
                 anchor="w",
                 padx=8,
+                pady=0,
                 bd=0,
+                text=SECTIONS[key],
+                compound="left",
                 bg=PANEL,
                 fg=TEXT,
                 activebackground=LINE,
@@ -133,7 +144,7 @@ class SectionStack(tk.Frame):
         if self.collapsed != collapsed or not self.order:
             for key in order:
                 closed = key in collapsed
-                self.toggles[key].configure(text=("▸  " if closed else "▾  ") + SECTIONS[key])
+                self.toggles[key].configure(image=self._arrows[closed])
                 if closed:
                     self.bodies[key].pack_forget()
                 else:
