@@ -1,11 +1,9 @@
 # OpenFill for PhotoCraft
 # SPDX-License-Identifier: Apache-2.0
 """The OpenFill panel: a window without a title bar that stays on top of PhotoCraft, like
-Photoshop's contextual task bar. Its header (OpenFill and the engine's status, the gear for
-Models and settings, and the collapse control) is the drag handle. Below it: the mode
-(Fill, Remove, Expand, Create), the prompt and options, the job card with the live preview
-and the variations, and the action buttons at the bottom. Collapsed, it is a small strip
-in PhotoCraft's corner.
+Photoshop's contextual task bar. Its header moves the whole panel. Inside, the edit tools,
+references and settings share one scrollable stack of collapsible, reorderable sections.
+Job actions stay at the bottom. The whole panel can fold into a small strip in PhotoCraft.
 
 Tk runs on the main thread; the job runs in the service's worker thread, and slower
 look-ups (models on disk, ComfyUI) in a refresher thread. The panel only reads their
@@ -22,7 +20,7 @@ import threading
 import tkinter as tk
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from PIL import Image, ImageDraw
 
@@ -31,6 +29,9 @@ from .menu import Watcher
 from .modelinfo import choose_card_line, download_card_line, hardware_line, needed_by
 from .service import Service
 from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
+
+if TYPE_CHECKING:
+    from .web import Api
 
 WIDTH = W
 PREVIEW_MAX = (CW - 24, 230)
@@ -41,8 +42,6 @@ CREATE_SIZES = (("Square", 1024, 1024), ("Landscape", 1216, 832), ("Portrait", 8
 STARTER = ("lama-big", "dreamshaper-8-inpainting")
 HEAD_H = 45  # the header and its divider
 FOOTER_H = 65  # the action bar: divider, 12 px, a 36 px button, 16 px
-GEAR_BAR_H = 44  # Models and settings' section control: 12 px and 32 px
-CREATE_TOTAL = 474  # the Create tools, as on the board: Models and settings is about this tall
 GO = {"fill": "Generate", "remove": "Remove", "expand": "Expand", "txt2img": "Create"}
 PLACEHOLDERS = {
     "fill": "Describe what to add, or leave it empty to fill from the surroundings.",
@@ -344,15 +343,18 @@ def rounded(im: Image.Image, radius: int, bg: str) -> Image.Image:
 class Bar:
     """The window. ``show(action)`` is what the Filter > Plug-ins entry calls."""
 
-    def __init__(self, service: Service, watcher: Watcher, page_url: str, profile: Path) -> None:
+    def __init__(self, service: Service, watcher: Watcher, page_url: str, profile: Path, *,
+                 api: Api | None = None) -> None:
+        from .web import Api
+
         self.service, self.watcher, self.page_url, self.profile = service, watcher, page_url, profile
+        self.api = Api(service) if api is None else api
         self.settings_file = profile / "bar.json"
         self.prefs = self._load_prefs()
         self.calls: queue.Queue = queue.Queue()  # actions from other threads
         self.refresher = Refresher(service, profile / "bar-models.json")
         self.wrap = CW
         self.colors = {"BG": BG, "OK": OK, "BAD": BAD, "DIM": DIM, "TEXT": TEXT, "WARN": WARN}
-        self.view = ""  # "" (the tools) or "settings" (Models and settings)
         self.root = tk.Tk(className="OpenFill")
         self.root.title("OpenFill")
         self.root.configure(bg=BG)
@@ -404,10 +406,11 @@ class Bar:
             pass
 
     def _build(self) -> None:
+        from .panels import ReferenceView, SectionStack, SettingsViews
+
         root, f = self.root, self.fonts
         self._build_header()
         ui.divider(root).pack(fill="x")
-        self.gear_bar = ui.frame(root)  # Models / Engine / Generation, shown with the gear view
         # The body scrolls as a whole when the screen is too short for it (no scroll bar).
         # The window's size is set by the panel (one geometry change per switch, see _resize);
         # the body takes what the header and the action bar leave.
@@ -427,8 +430,13 @@ class Bar:
             pass
         self._bottom: int | None = None  # the bottom edge the panel keeps (where it opened from the strip)
         self._resize_soon = False
-        self.main = ui.frame(self.inner)
-        self.main.pack(fill="x", padx=PAD)
+        self.sections = SectionStack(
+            self.inner, self.scroller, self.service.app.settings.panel_layout,
+            lambda layout: self.api.post("/api/layout", layout),
+            lambda message: ui.message(self.root, message),
+        )
+        self.sections.pack(fill="x", padx=PAD)
+        self.main = self.sections.bodies["edit"]
         self.bottom_gap = ui.gap(self.inner, 16)
         self.bottom_gap.pack(fill="x")
 
@@ -491,6 +499,7 @@ class Bar:
             manage=lambda: self.select_view("models"),
         )
         self.model_box.pack(side="left")
+        self.reference_status = ui.small(self.options, "")
 
         # The setup card (ComfyUI missing, no models, a download) and the job card
         self.setup = ui.Card(m)
@@ -514,12 +523,10 @@ class Bar:
         self.thumb_row.pack(fill="x", pady=(8, 0))
         self.thumb_cells: list[tk.Canvas] = []
 
-        # Models and settings, behind the gear
-        from .panels import GearView
-
-        self.gear = GearView(self, self.inner)
-        self.models_view = self.gear.models
-        self.settings_view = self.gear
+        self.settings_view = SettingsViews(self, self.sections.bodies)
+        self.models_view = self.settings_view.models
+        self.references = ReferenceView(self, self.sections.bodies["references"])
+        self.references.pack(fill="x")
 
         # The action bar at the bottom
         ui.divider(self.footer).pack(fill="x")
@@ -533,7 +540,6 @@ class Bar:
         self.keep_button = ui.Button(
             self.actions, "Keep", lambda: self.keep("selected"), "primary", CW - 2 * third - 16
         )
-        self.save_button = ui.Button(self.actions, "Save", self.gear.save, "primary", CW)
         self._footer_key: tuple = ()
 
         self._build_pill()
@@ -562,8 +568,6 @@ class Bar:
         head.pack(fill="x")
         self.collapse_button = ui.IconButton(head, "collapse", self.collapse)
         self.collapse_button.pack(side="right", padx=(2, 10))
-        self.gear_button = ui.IconButton(head, "gear", self.toggle_gear)
-        self.gear_button.pack(side="right")
         self.head_tools = ui.frame(head)
         logo = tk.Label(self.head_tools, image=ui.app_icon(18, BG), bg=BG, bd=0, highlightthickness=0)
         logo.pack(side="left")
@@ -573,13 +577,9 @@ class Bar:
         self.status_dot.pack(side="left", padx=(12, 0))
         self.status = ui.small(self.head_tools, "Checking...", wrap=0)
         self.status.pack(side="left", padx=(6, 0))
-        self.head_view = ui.frame(head)
-        ui.IconButton(self.head_view, "back", lambda: self.select_tab(self.tab.get())).pack(side="left")
-        view_title = ui.text(self.head_view, "Models and settings", f.bold)
-        view_title.pack(side="left", padx=(0, 0))
         self.head_tools.pack(side="left", padx=(PAD, 0), fill="y")
         ui.drag_handle(
-            (head, self.head_tools, logo, name, self.status_dot, self.status, self.head_view, view_title),
+            (head, self.head_tools, logo, name, self.status_dot, self.status),
             self.root,
             self._dragged,
         )
@@ -647,32 +647,17 @@ class Bar:
     # scrolling -----------------------------------------------------------------------
 
     def _max_body(self) -> int:
-        return max(200, self.root.winfo_screenheight() - HEAD_H - GEAR_BAR_H - FOOTER_H - 64)
+        return max(200, self.root.winfo_screenheight() - HEAD_H - FOOTER_H - 64)
 
     def _footer_shown(self) -> bool:
         return bool(self._footer_key)
 
     def _body_height(self) -> int:
-        """The body's height: the tools' parts as packed (each part's size is already known,
-        so nothing is laid out again for this), or the gear view's fixed height."""
-        if self.view:
-            return self._gear_total() - HEAD_H - GEAR_BAR_H - (FOOTER_H if self._footer_shown() else 0)
-        parts = self._shown.get("parts") or []
-        return sum(p.winfo_reqheight() + 12 for p in parts) + 16
-
-    def _gear_total(self) -> int:
-        """Models and settings keep one window height for all three sections: as tall as the
-        tallest of Engine and Generation, and at least the Create tools."""
-        if not getattr(self, "_gear_h", 0):
-            self.root.update_idletasks()
-            sections = max(self.gear.engine.winfo_reqheight(), self.gear.generation.winfo_reqheight())
-            settings = HEAD_H + GEAR_BAR_H + sections + 16 + FOOTER_H
-            self._gear_h = max(settings, CREATE_TOTAL)
-        return self._gear_h
+        return self.inner.winfo_reqheight()
 
     def _target_height(self) -> int:
         body = min(self._body_height(), self._max_body())
-        return HEAD_H + (GEAR_BAR_H if self.view else 0) + body + (FOOTER_H if self._footer_shown() else 0)
+        return HEAD_H + body + (FOOTER_H if self._footer_shown() else 0)
 
     def _resize(self) -> None:
         """Give the window its height in one geometry change, keeping its bottom edge (the
@@ -700,7 +685,7 @@ class Bar:
         """The body's contents changed size (a job card, a wrapped line, the models list)."""
         want = self.inner.winfo_reqheight()
         self.scroller.configure(scrollregion=(0, 0, W, want))
-        if not self.view and not self._resize_soon:
+        if not self._resize_soon:
             self._resize_soon = True
             self.root.after_idle(self._resize)
 
@@ -782,7 +767,7 @@ class Bar:
         self._placing = False
         self.root.bind_class(ui.own_tag_name(self.root), "<Configure>", self._moved, add="+")
         self.root.withdraw()
-        self._gear_total()  # measured once now, while the window is hidden
+        self.root.update_idletasks()
         self._tie()
         if self.prefs.get("collapsed", True):
             self.collapse()
@@ -927,11 +912,10 @@ class Bar:
             self.select_view("engine" if action == "settings" else action)
         elif action in dict(TABS):
             self.select_tab(action)
-        elif self.view:
-            self.select_tab(self.tab.get())
+            self.select_view("edit")
         if action == "remove":
             self.generate()
-        elif action in ("fill", "txt2img", "expand", "", "panel"):
+        elif action in ("fill", "txt2img", "expand", "", "panel") and "edit" not in self.sections.collapsed:
             self.root.focus_force()
             self.prompt.focus()
             self.prompt.select_all()
@@ -950,60 +934,27 @@ class Bar:
                 "To bring it back, use Filter > Plug-ins > OpenFill in PhotoCraft.",
             )
 
-    def toggle_gear(self) -> None:
-        if self.view:
-            self.select_tab(self.tab.get())
-        else:
-            self.select_view(self.gear.section)
-
     def select_view(self, view: str) -> None:
-        with ui.frozen(self.root):
-            self._select_view(view)
+        """Expand and reveal a section reached from a model menu or editor action."""
+        if view not in self.sections.frames:
+            return
+        self.model_box.close()
+        self.sections.open(view)
+        if view == "models":
+            self.refresh_model_visibility()
+            self.refresher.wake.set()
+        self.root.update_idletasks()
+        y = self.sections.winfo_y() + self.sections.frames[view].winfo_y()
+        self.scroller.yview_moveto(y / max(1, self._body_height()))
 
     def select_tab(self, key: str) -> None:
         with ui.frozen(self.root):
             self._select_tab(key)
 
-    def _select_view(self, view: str) -> None:
-        """Models and settings in place of the tools: ``view`` is its section (models, engine,
-        generation; "settings" is the engine). The same section again goes back."""
-        section = {"settings": "engine"}.get(view, view)
-        if self.view and self.gear.section == section and view == self._last_view:
-            self.select_tab(self.tab.get())
-            return
-        self._last_view = view
-        self.model_box.close()
-        entering = not self.view
-        self.view = "settings"
-        if entering:
-            self.gear.load()  # the saved settings, once per visit (switching sections keeps edits)
-        self.main.pack_forget()
-        self.gear.pack(fill="x", padx=PAD, before=self.bottom_gap)
-        self.head_tools.pack_forget()
-        self.head_view.pack(side="left", padx=(PAD, 0), fill="y")
-        self.gear_bar.pack(fill="x", before=self.scroller)
-        self.gear_button.set_active(True)
-        self.gear.show_section(section)
-        self.refresher.wake.set()
-        self._layout_footer()
-        self.scroller.yview_moveto(0)
-        self._resize()
-
-    _last_view = ""
-
     def _select_tab(self, key: str) -> None:
         if self.service.app.settings.remote_fibo:
             key = "fill"
         self.model_box.close()
-        if self.view:
-            self.view = ""
-            self._last_view = ""
-            self.gear.pack_forget()
-            self.main.pack(fill="x", padx=PAD, before=self.bottom_gap)
-            self.head_view.pack_forget()
-            self.gear_bar.pack_forget()
-            self.head_tools.pack(side="left", padx=(PAD, 0), fill="y")
-            self.gear_button.set_active(False)
         if key != self.tab.get():
             self._note = None
         self.tab.set(key)
@@ -1018,13 +969,12 @@ class Bar:
         self._fill_models()
         self._update_context()
         self._layout_footer()
-        self.scroller.yview_moveto(0)
         self._resize()
 
     def _layout_main(self) -> None:
         """Pack the tool view's parts for the current mode (12 px apart)."""
         key = self.tab.get()
-        parts: list[tk.Misc] = [self.modes, self.context_row]
+        parts: list[tk.Misc] = [self.context_row] if self.service.app.settings.remote_fibo else [self.modes, self.context_row]
         if key == "remove":
             parts.append(self.remove_line)
         if key == "expand":
@@ -1053,33 +1003,22 @@ class Bar:
             card.lift_corners()
 
     def _layout_footer(self) -> None:
-        if self.view:
-            section = self.gear.section
-            hidden = section == "models" or (self.service.app.settings.remote_fibo and section != "generation")
-            buttons = [] if hidden else [self.save_button]
+        st = self.service.state.snapshot()
+        if st["state"] == "running":
+            buttons = [self.cancel_button]
+        elif st["state"] == "done" and len(st["variations"]) > 1:
+            buttons = [self.discard_button, self.keep_all_button, self.keep_button]
         else:
-            st = self.service.state.snapshot()
-            if st["state"] == "running":
-                buttons = [self.cancel_button]
-            elif st["state"] == "done" and len(st["variations"]) > 1:
-                buttons = [self.discard_button, self.keep_all_button, self.keep_button]
-            else:
-                buttons = [self.go]
+            buttons = [self.go]
         key = tuple(id(b) for b in buttons)
         if key == self._footer_key:
             return
         self._footer_key = key
         for b in self.actions.pack_slaves():
             b.pack_forget()
-        if not buttons:
-            self.footer.pack_forget()
-        else:
-            if not self.footer.winfo_manager():
-                self.footer.pack(side="bottom", fill="x", before=self.scroller)
-            for i, b in enumerate(buttons):
-                b.pack(side="left", padx=(8 if i else 0, 0))
-        if not self.view:
-            self._inner_changed()
+        for i, b in enumerate(buttons):
+            b.pack(side="left", padx=(8 if i else 0, 0))
+        self._inner_changed()
 
     def pick_variations(self, n: int) -> None:
         self.variations.set(n)
@@ -1129,6 +1068,7 @@ class Bar:
         """The Model select: the model picked becomes the active one (Remove keeps its own
         choice; a removal model picked in Fill is used for that run only)."""
         self.model_choice.set(label)
+        self._fill_models()
         if self.tab.get() == "remove":
             self.prefs["removal"] = label
             return
@@ -1158,6 +1098,8 @@ class Bar:
                 )
                 if self.service.app.settings.remote_fibo:
                     body.pop("strength")  # Let the selected edit model choose its tested default.
+                if kind == "fill" and self._reference_options(self.refresher.get())[0] and self.service.reference_rows():
+                    body["useReferences"] = True
                 if kind == "remove":
                     removal = self._model_ids.get(self.model_choice.get(), "default")
                     body.update(removal=removal)
@@ -1262,31 +1204,47 @@ class Bar:
     # updates ----------------------------------------------------------------------
 
     def _say(self, text: str, color: str = OK) -> None:
-        """A message: in the open settings section, or in place of the context line (red with
-        an error mark for a problem) until what it was about changes."""
-        if self.view and text:
-            self.gear.say(text, color)
-            return
+        """Show a generation message until its document or selection changes."""
         if not text:
             self._note = None
         else:
             self._note = (text, color, self._context_base()[0])
         self._update_context()
+        if text and color == BAD and "edit" in self.sections.collapsed:
+            ui.message(self.root, text, "error")
+
+    def refresh_model_visibility(self) -> None:
+        """Reflect the saved checkbox state immediately, without rescanning the server."""
+        self.models_view.update_view(self.refresher.get())
+        self._fill_models()
+
+    def _reference_options(self, facts: dict[str, Any]) -> tuple[int, str]:
+        model = self._model()
+        if self.tab.get() == "fill":
+            for row in facts.get("rows") or []:
+                if row["id"] == model:
+                    return row.get("max_references", 0), row.get("reference_syntax", "")
+        return 0, ""
 
     def _fill_models(self) -> None:
         facts = self.refresher.get()
         tab = self.tab.get()
-        models = facts.get("models") or {}
+        all_models = facts.get("models") or {}
+        hidden = set(self.service.app.settings.hidden_models)
+        models = {kind: [(model_id, name) for model_id, name in options if model_id not in hidden]
+                  for kind, options in all_models.items()}
+        shown_facts = {**facts, "models": models}
         if tab == "remove":
             has_any = bool(models.get("remove") or models.get("fill"))
-            choices = removal_choices(facts) if has_any else {}
+            choices = removal_choices(shown_facts) if has_any else {}
             wanted = self.prefs.get("removal", "")
         else:
-            choices = fill_choices(facts) if tab == "fill" else {name: i for i, name in models.get(tab, [])}
+            choices = fill_choices(shown_facts) if tab == "fill" else {name: i for i, name in models.get(tab, [])}
             wanted = facts.get("active_name") or ""
         self._model_ids = choices
         names = list(choices)
         if self.model_box.values != names:
+            self.model_box.close()
             self.model_box.set_values(names)
         current = self.model_choice.get()
         if current not in names:
@@ -1295,12 +1253,31 @@ class Bar:
         if not facts:
             shown = "Checking..."
         elif not names:
-            shown = NO_MODELS
+            has_options = bool(all_models.get(tab) or (tab in ("fill", "remove")
+                                                      and (all_models.get("remove") or all_models.get("fill"))))
+            shown = "No models shown" if has_options else NO_MODELS
         else:
             shown = current
         self.model_box.set(shown)
         busy = self.service.busy()
-        self.go.set(disabled=busy or (bool(facts) and not names))
+        limit, syntax = self._reference_options(facts)
+        self.references.refresh(limit, syntax, busy)
+        count = len(self.references.rows)
+        if count:
+            label = f"{count} reference image" + ("s" if count != 1 else "")
+            if not limit:
+                label += " kept for a compatible model"
+            elif count > limit:
+                label += f" attached · this model allows {limit}"
+            else:
+                label += " attached"
+            if self.reference_status.cget("text") != label:
+                self.reference_status.configure(text=label)
+            if not self.reference_status.winfo_manager():
+                self.reference_status.pack(anchor="w", pady=(6, 0))
+        elif self.reference_status.winfo_manager():
+            self.reference_status.pack_forget()
+        self.go.set(disabled=busy or not names or (bool(limit) and (count > limit or self.references.adding)))
 
     def _context_base(self) -> tuple[str, str, str]:
         """(text, colour, icon) for the line under the modes."""
@@ -1372,19 +1349,21 @@ class Bar:
 
     def _update(self) -> None:
         facts = self.refresher.get()
-        if not self.view:
-            self._update_context()
-            self._fill_models()
+        self.sections.apply(self.service.app.settings.panel_layout)
+        self._update_context()
+        self._fill_models()
         status = self._engine_status(facts)
         if self._shown.get("status") != status:
             self._shown["status"] = status
             self.status.configure(text=ui.ellipsize(status, self.small, 200))
             self.status_dot.configure(image=ui.dot(STATUS_COLOR.get(status, DIM), BG))
         self._update_setup(facts)
-        if facts.get("rows") is not self._shown.get("rows") or self.view:
+        hidden = tuple(self.service.app.settings.hidden_models)
+        if facts.get("rows") is not self._shown.get("rows") or hidden != self._shown.get("hidden"):
             # new facts (a look every few seconds): the models list follows, shown or not
             self._shown["rows"] = facts.get("rows")
-            self.gear.update_view(facts)
+            self._shown["hidden"] = hidden
+            self.settings_view.update_view(facts)
 
         st = self.service.state.snapshot()
         self.cancel_button.set(disabled=bool(st.get("committing")),
@@ -1469,7 +1448,7 @@ class Bar:
             self.setup_bar.set(fraction)
         was = self._shown.get("setup")
         self._shown["setup"] = bool(key)
-        if was != bool(key) and not self.view:
+        if was != bool(key):
             self._layout_main()
 
     def _build_setup(self, key: tuple) -> None:
@@ -1504,8 +1483,7 @@ class Bar:
         shown = st["state"] != "idle"
         if self._shown.get("job") != shown:
             self._shown["job"] = shown
-            if not self.view:
-                self._layout_main()
+            self._layout_main()
         if not shown:
             self._update_preview(st)
             return

@@ -10,7 +10,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .. import hardware, workflow
+from .. import hardware, png, workflow
 from ..backend import (
     Backend,
     BackendUnavailable,
@@ -29,6 +29,7 @@ from ..backend import (
     Txt2ImgRequest,
     UnsupportedGpu,
     WorkflowRejected,
+    validate_edit_references,
 )
 from ..comfy_api import ComfyApiError, ComfyClient, ComfyExecutionError
 from ..geometry import estimate_timeout, seed_or_random
@@ -130,11 +131,28 @@ class ComfyBackend(Backend):
         preview: PreviewCallback | None = None,
         cancel: CancelCallback | None = None,
     ) -> GenerationResult:
+        references = request.reference_images
+        if references:
+            try:
+                if request.mode != "fill" or not request.prompt.strip():
+                    raise ValueError("Reference images require a prompted edit.")
+                validate_edit_references(request.model.effective_template, len(references))
+                for index, data in enumerate(references, start=2):
+                    if not isinstance(data, bytes):
+                        raise ValueError(f"Image {index} is not an encoded PNG.")
+                    try:
+                        width, height, _depth, _color = png.read_header(data)
+                    except png.PngError as err:
+                        raise ValueError(f"Image {index} is not an encoded PNG.") from err
+                    if min(width, height) < 1:
+                        raise ValueError(f"Image {index} has invalid dimensions.")
+            except ValueError as err:
+                raise WorkflowRejected(str(err)) from err
         caps = self.capabilities()
         if request.model.uses_fooocus and not caps.inpaint_nodes:
             raise ModelMissing("the Fooocus inpaint patch needs comfyui-inpaint-nodes on the server")
         seed = seed_or_random(request.sampling.seed)
-        self._report(progress, 0.0, "Uploading selection...")
+        self._report(progress, 0.0, "Uploading selection and references..." if references else "Uploading selection...")
         started = time.monotonic()
         try:
             image_data = workflow.probe_safe_png(request.image_png)
@@ -145,8 +163,19 @@ class ComfyBackend(Backend):
             job = _content_id(image_data, mask_data)
             image_ref = self.client.upload_image(f"sb-{job}-image.png", image_data)
             mask_ref = self.client.upload_image(f"sb-{job}-mask.png", mask_data)
+            reference_refs = []
+            for data in references:
+                if cancel and cancel():
+                    raise GenerationCancelled("cancelled before uploading reference images")
+                data = workflow.probe_safe_png(data)
+                reference_refs.append(self.client.upload_image(f"sb-{_content_id(data)}-reference.png", data))
         except ComfyApiError as err:
             raise BackendUnavailable(f"upload failed: {err}") from err
+        if references:
+            if cancel and cancel():
+                raise GenerationCancelled("cancelled before submitting the edit")
+            # The target and mask keep their cache IDs across attachment changes.
+            job = _content_id(image_data, mask_data, *references)
         if self.log:
             self.log.info(
                 "timing: upload image=%d mask=%d bytes in %.3f s",
@@ -156,7 +185,8 @@ class ComfyBackend(Backend):
             )
         prefix = f"openfill/{request.mode}-{job}"
         try:
-            graph = workflow.build_fill(request, image_ref, mask_ref, seed, caps, filename_prefix=prefix)
+            graph = workflow.build_fill(request, image_ref, mask_ref, seed, caps, filename_prefix=prefix,
+                                        reference_refs=tuple(reference_refs))
         except ValueError as err:
             raise WorkflowRejected(str(err)) from err
         pixels = int(getattr(request, "work_pixels", 0) or request.work_width * request.work_height)
@@ -174,7 +204,8 @@ class ComfyBackend(Backend):
                 self.log.warning("server has no OpenCV; retrying with neutral pre-fill")
             request.prefill_mode = "neutral"
             fallback = True
-            graph = workflow.build_fill(request, image_ref, mask_ref, seed, caps, filename_prefix=prefix)
+            graph = workflow.build_fill(request, image_ref, mask_ref, seed, caps, filename_prefix=prefix,
+                                        reference_refs=tuple(reference_refs))
             images = self._run(
                 graph, request.sampling.steps, request.sampling.batch, pixels, progress, preview, cancel, request.model
             )

@@ -35,6 +35,8 @@ from .backend import (
     QWEN21_EDIT_TEMPLATE,
     Sampling,
     Txt2ImgRequest,
+    edit_reference_options,
+    validate_edit_references,
 )
 from .backends.a1111 import A1111Backend
 from .backends.comfy import ComfyBackend
@@ -465,6 +467,7 @@ class App:
         active = self.active_model_id()
         rows = []
         for e in self.catalog:
+            max_references, reference_syntax = edit_reference_options(e.template)
             st = (cat.InstallStatus(True, seen_by_server=True) if self.settings.remote_fibo
                   else cat.install_status(e, self.models_root, self.custom_nodes_dir, self.catalog, server_files))
             label = st.label
@@ -493,6 +496,9 @@ class App:
                     "partial": st.partial,
                     "capabilities": list(e.capabilities),
                     "template": e.template or "",
+                    "max_references": max_references,
+                    "reference_syntax": reference_syntax,
+                    "visible": e.id not in self.settings.hidden_models,
                     "seen_by_server": st.seen_by_server,
                     "remote": self.settings.remote_fibo,
                 }
@@ -842,6 +848,8 @@ class App:
         model_choice: str,
         remove: bool = False,
         as_picked: bool = False,
+        *,
+        reference_images: tuple[bytes, ...] = (),
     ) -> list:
         # ``as_picked``: ``model_choice`` was picked by hand for this job (a Remove menu), so it
         # is used even when it is also the active model.
@@ -851,6 +859,9 @@ class App:
         self._check_image(image)
         if self.settings.remote_fibo and (remove or not prompt.strip()):
             raise BackendError("Describe the desired edit or selected content. Select All to edit the whole image.")
+        reference_images = tuple(reference_images)
+        if reference_images and (remove or not prompt.strip()):
+            raise BackendError("Reference images require a prompted edit.")
         selection = self.io.selection_rect(image)
         if selection is None:
             self.log.info("fill: refused, nothing selected")
@@ -871,6 +882,10 @@ class App:
                     model_choice,
                 )
         entry, model = self.resolve_model(model_choice)
+        try:
+            validate_edit_references(model.effective_template, len(reference_images))
+        except ValueError as err:
+            raise BackendError(str(err)) from err
         selection_edit = model.effective_template in workflow.SELECTION_EDIT_TEMPLATES
         fibo_edit = model.effective_template == "fibo2_edit"
         # Options saved while this job runs apply to the next edit. Freeze all
@@ -1031,6 +1046,7 @@ class App:
             prefill_mode=prefill_mode,
             color_match=color_match,
             fibo_edit_mode=fibo_mode if fibo_edit else "preserve",
+            reference_images=reference_images,
             tiles=plan.tiles,
             refine_tiles=plan.refine_tiles,
             refine_denoise=float(self.settings.refine_denoise),

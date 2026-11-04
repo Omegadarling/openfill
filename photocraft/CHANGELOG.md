@@ -5,7 +5,13 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0-portable.1] — Development branch
+## [0.10.0-portable.1] — Development branch
+
+- Add ordered image attachments for Qwen Image 2.1 and FIBO 2.0 edits.
+- Add model visibility switches in Manage Models.
+- Move settings into the main panel and remember section order and collapsed state.
+
+## [0.9.0-portable.1]
 
 - Add native Qwen Image 2.1 and four-step Lightning v2 RL image editing.
 - Add FIBO 2.0 image editing with Preserve and Replace controls.

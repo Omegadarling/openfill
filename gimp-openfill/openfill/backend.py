@@ -21,6 +21,22 @@ CancelCallback = Callable[[], bool]  # polled; True aborts the running job
 QWEN21_EDIT_TEMPLATE = "qwen21_edit"
 QWEN21_FULL_FILE = "qwen_image_2.1_bf16.safetensors"
 QWEN21_LIGHTNING_FILE = "qwen_image_2.1_lightning_v2_rl_bf16.safetensors"
+EDIT_REFERENCE_OPTIONS = {QWEN21_EDIT_TEMPLATE: (15, "<imageN>"), "fibo2_edit": (15, "<image_N>")}
+
+
+def edit_reference_options(template: str | None) -> tuple[int, str]:
+    """Maximum extra images and prompt token format. Slot 1 is the edit target."""
+    return EDIT_REFERENCE_OPTIONS.get(template, (0, ""))
+
+
+def validate_edit_references(template: str, count: int) -> None:
+    if not count:
+        return
+    maximum, _ = edit_reference_options(template)
+    if not maximum:
+        raise ValueError("This model does not support reference images. Choose a reference-capable model or remove the attachments.")
+    if count > maximum:
+        raise ValueError(f"This model accepts up to {maximum} reference images in addition to the target.")
 
 
 class BackendError(RuntimeError):
@@ -150,6 +166,8 @@ class InpaintRequest:
     # FIBO only: masked source-latent editing for structure, or replace selected
     # content using FIBO's grey-region reference conditioning and empty latent.
     fibo_edit_mode: str = "preserve"  # preserve | replace
+    # Immutable normalized PNGs in attachment order; the target is separate.
+    reference_images: tuple[bytes, ...] = ()
 
     @property
     def needs_scaling(self) -> bool:

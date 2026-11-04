@@ -412,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from openfill_photocraft.bar import Bar
 
-            bar = holder["bar"] = Bar(service, watcher, url, profile)
+            bar = holder["bar"] = Bar(service, watcher, url, profile, api=api)
         except Exception as err:  # noqa: BLE001 - no Tk or no display: use the page
             import traceback
 

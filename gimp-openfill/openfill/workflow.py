@@ -20,7 +20,7 @@ import zlib
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
-from .backend import InpaintRequest, ModelSpec, QWEN21_EDIT_TEMPLATE, Txt2ImgRequest
+from .backend import InpaintRequest, ModelSpec, QWEN21_EDIT_TEMPLATE, Txt2ImgRequest, validate_edit_references
 
 OUTPUT_NODE = "save"
 
@@ -805,6 +805,15 @@ QWEN21_RESOLUTION = 1024
 QWEN21_LIGHTNING_SIGMAS = "1.0, 0.95418, 0.89508, 0.704534, 0.0"
 
 
+def _edit_image_slots(g: Graph, target: list, reference_refs: tuple[str, ...]) -> dict:
+    """Build native autogrow inputs with the edit target always in slot 1."""
+    slots = {"images.image_1": target}
+    for index, image in enumerate(reference_refs, start=2):
+        node = g.add(f"reference_{index}", "LoadImage", image=image)
+        slots[f"images.image_{index}"] = g.out(node)
+    return slots
+
+
 def qwen21_reference_size(width: int, height: int) -> tuple[int, int]:
     """Match the first image's latent size in native TextEncodeQwenImage21."""
     if min(width, height) < 1:
@@ -821,6 +830,8 @@ def build_qwen21_edit(
     seed: int,
     caps: Capabilities,
     filename_prefix: str = "openfill/qwen21-edit",
+    *,
+    reference_refs: tuple[str, ...] = (),
 ) -> dict:
     """Native Qwen 2.1 instruction editing, clipped to the PhotoCraft selection."""
     if req.mode != "fill" or not req.prompt.strip():
@@ -839,7 +850,7 @@ def build_qwen21_edit(
     g.add("selection_support", "ThresholdMask", mask=g.out("selection_mask"), value=0.0)
     g.add("encode", "TextEncodeQwenImage21", clip=g.out("clip"), vae=g.out("vae"),
           prompt=req.prompt, negative_prompt="", resolution=QWEN21_RESOLUTION,
-          **{"images.image_1": g.out("load_image")})
+          **_edit_image_slots(g, g.out("load_image"), reference_refs))
     g.add("cache", "QwenImage21Cache", model=g.out("unet"), device="auto", dtype="default")
     latent = g.out("encode", 2)
     batch = max(1, int(req.sampling.batch))
@@ -1020,6 +1031,8 @@ def build_fibo2_edit(
     seed: int,
     caps: Capabilities,
     filename_prefix: str = "openfill/fibo2",
+    *,
+    reference_refs: tuple[str, ...] = (),
 ) -> dict:
     """Selection-aware FIBO editing with original exterior and one alpha blend.
 
@@ -1086,7 +1099,7 @@ def build_fibo2_edit(
         width=width,
         height=height,
         batch_size=max(1, int(req.sampling.batch)),
-        **{"images.image_1": reference},
+        **_edit_image_slots(g, reference, reference_refs),
     )
     sampler_latent = g.out("encode", 2)
     denoise = 1.0
@@ -1358,9 +1371,18 @@ def build_fill(
     seed: int,
     caps: Capabilities,
     filename_prefix: str = "openfill/fill",
+    *,
+    reference_refs: tuple[str, ...] = (),
 ) -> dict:
     """Dispatch on the active model's template."""
-    return select_builder(req.model.effective_template)(req, image_ref, mask_ref, seed, caps, filename_prefix)
+    template = req.model.effective_template
+    builder = select_builder(template)
+    if req.reference_images and len(reference_refs) != len(req.reference_images):
+        raise ValueError("The uploaded reference list does not match the edit request.")
+    if reference_refs:
+        validate_edit_references(template, len(reference_refs))
+        return builder(req, image_ref, mask_ref, seed, caps, filename_prefix, reference_refs=reference_refs)
+    return builder(req, image_ref, mask_ref, seed, caps, filename_prefix)
 
 
 def build_txt2img(req: Txt2ImgRequest, seed: int, filename_prefix: str = "openfill/txt2img") -> dict:

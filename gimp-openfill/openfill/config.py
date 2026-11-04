@@ -13,6 +13,8 @@ import math
 import os
 import shutil
 import sys
+import tempfile
+import threading
 import time
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -30,6 +32,33 @@ SERVER_LOG_FILENAME = "comfyui.log"
 MODELS_CACHE_FILENAME = "models-cache.json"
 HUB_CACHE_FILENAME = "hub-cache.json"
 HUB_SELECTED_FILENAME = "hub-selected.json"
+
+PANEL_SECTIONS = ("edit", "references", "models", "engine", "generation")
+DEFAULT_COLLAPSED = ("models", "engine", "generation")
+_SAVE_LOCK = threading.Lock()
+
+
+def normalize_panel_layout(value: Any) -> dict[str, list[str]]:
+    """Keep each known section once and append sections added in later versions."""
+    if not isinstance(value, dict):
+        value = {}
+
+    def sections(key, default):
+        items = value.get(key)
+        if not isinstance(items, list):
+            return list(default)
+        return list(dict.fromkeys(item for item in items if isinstance(item, str) and item in PANEL_SECTIONS))
+
+    order = sections("order", PANEL_SECTIONS)
+    order.extend(section for section in PANEL_SECTIONS if section not in order)
+    return {"order": order, "collapsed": sections("collapsed", DEFAULT_COLLAPSED)}
+
+
+def normalize_hidden_models(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return list(dict.fromkeys(item for item in value if isinstance(item, str) and 0 < len(item) <= 256))
+
 
 FIBO_EDIT_MODES = {"preserve": "Preserve structure", "replace": "Replace selected content"}
 FIBO_CONTEXT_MODES = {"local": "Surrounding area", "full": "Full image"}
@@ -139,6 +168,8 @@ class Settings:
     txt2img_height: int = 512
     debug: bool = False
     active_model: str = ""  # catalog id set active by hand; "" = the automatic default (catalog.auto_active)
+    hidden_models: list[str] = field(default_factory=list)  # chooser only, independently of installed models
+    panel_layout: dict[str, list[str]] = field(default_factory=lambda: normalize_panel_layout(None))
     hf_token: str = field(default="", repr=False)  # Hugging Face access token for gated files (local only)
     progress_window: bool = True  # floating progress/preview window
     progress_window_x: int = -1  # last position; -1 = top-right of the image window
@@ -190,7 +221,12 @@ class Settings:
         for key, value in data.items():
             if key in known:
                 try:
-                    setattr(settings, key, _coerce(getattr(settings, key), value))
+                    if key == "panel_layout":
+                        settings.panel_layout = normalize_panel_layout(value)
+                    elif key == "hidden_models":
+                        settings.hidden_models = normalize_hidden_models(value)
+                    else:
+                        setattr(settings, key, _coerce(getattr(settings, key), value))
                 except (TypeError, ValueError):
                     pass
         if settings.remote_fibo:
@@ -252,13 +288,19 @@ class Settings:
         path = Path(path)
         if self._protected_path and os.path.abspath(path) == os.path.abspath(self._protected_path):
             raise OSError(f"not saving: '{path}' could not be read and was not backed up, so it is kept as it is")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        data = {f.name: getattr(self, f.name) for f in fields(self) if f.metadata.get("persist", True)}
-        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        if os.name == "posix":
-            os.chmod(tmp, 0o600)  # the file holds the Hugging Face token
-        os.replace(tmp, path)
+        with _SAVE_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = {f.name: getattr(self, f.name) for f in fields(self) if f.metadata.get("persist", True)}
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=f".{path.name}.",
+                                                 suffix=".tmp", encoding="utf-8", delete=False) as file:
+                    temporary = Path(file.name)
+                    file.write(json.dumps(data, indent=2) + "\n")
+                os.replace(temporary, path)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
     # derived -----------------------------------------------------------
 

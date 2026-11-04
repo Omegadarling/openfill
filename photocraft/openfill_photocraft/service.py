@@ -24,6 +24,7 @@ from openfill.supervisor import process_name
 
 from .bridge import PCImage, PCLayer, PhotoCraftBridge
 from .control import ControlClient, ControlError
+from .references import ReferenceImages
 
 NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection. Select > All works on the whole image."
 
@@ -135,6 +136,7 @@ class Service:
         self.app.server.watch_name = process_name(os.getpid()) or "python"
         self._thread: threading.Thread | None = None
         self._operation_lock = threading.Lock()
+        self.references = ReferenceImages()
         self._switching = False
         self.watcher = None  # menu.Watcher, set by the launcher: keeps the document's facts current
         self.engine = ""  # "" not started by us, "starting", "ready", or why it failed
@@ -286,6 +288,12 @@ class Service:
         finally:
             self._operation_lock.release()
 
+    def reference_rows(self):
+        return self.references.rows()
+
+    def add_reference_files(self, paths):
+        return self.references.add_files(paths)
+
     def _start(self, kind: str, params: dict[str, Any]) -> None:
         if self.app.settings.remote_fibo:
             if kind != "fill" or params.get("remove"):
@@ -294,6 +302,13 @@ class Service:
                 raise RuntimeError("Describe the desired edit or selected content.")
         if self.busy():
             raise RuntimeError("A job is already running.")
+        use_references = params.get("useReferences", False)
+        if not isinstance(use_references, bool):
+            raise ValueError("Reference use must be on or off.")
+        if use_references and (kind != "fill" or params.get("remove")):
+            raise ValueError("Reference images are available for prompted edits.")
+        # Freeze the image bytes and their order before the background worker starts.
+        params = dict(params, _reference_images=self.references.snapshot() if use_references else ())
         with self.state.lock:
             self.state.state, self.state.kind, self.state.message, self.state.text = "running", kind, "", "Starting..."
             self.state.title = {
@@ -356,6 +371,7 @@ class Service:
             if kind == "fill" and p.get("remove"):
                 layers = self._remove(image, p, seed, variations)
             elif kind == "fill":
+                references = p.get("_reference_images", ())
                 layers = self.app.generative_fill(
                     image,
                     str(p.get("prompt", "")),
@@ -365,6 +381,7 @@ class Service:
                     seed,
                     model,
                     remove=bool(p.get("remove")),
+                    **({"reference_images": references} if references else {}),
                 )
             elif kind == "expand":
                 layers = self.app.generative_expand(

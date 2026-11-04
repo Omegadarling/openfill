@@ -8,6 +8,8 @@ another local program cannot drive PhotoCraft through it.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import math
 import secrets
@@ -19,9 +21,10 @@ from urllib.parse import parse_qs, urlparse
 
 from openfill import catalog as cat
 from openfill.backend import describe_error
-from openfill.config import validate_fibo_settings
+from openfill.config import normalize_panel_layout, validate_fibo_settings
 
 from . import __version__
+from .references import MAX_UPLOAD
 from .service import Service
 
 STATIC = Path(__file__).with_name("static")
@@ -53,6 +56,7 @@ class Api:
         self.key = secrets.token_urlsafe(24)
         self.on_show = None  # brings the OpenFill bar up (set by the launcher)
         self._pick = {"seq": 0, "action": ""}  # the last Filter menu pick, for the page
+        self._preferences_lock = threading.Lock()
 
     def pick(self, action: str) -> None:
         self._pick = {"seq": self._pick["seq"] + 1, "action": action}
@@ -131,6 +135,20 @@ class Api:
         s = self.service.app.settings
         return {k: getattr(s, k) for k in EDITABLE}
 
+    def layout(self):
+        return normalize_panel_layout(self.service.app.settings.panel_layout)
+
+    def _save_preference(self, key, value):
+        app = self.service.app
+        settings = app.settings
+        previous = getattr(settings, key)
+        setattr(settings, key, value)
+        try:
+            settings.save(app.paths.config)
+        except OSError:
+            setattr(settings, key, previous)
+            raise
+
     def sources(self) -> dict[str, Any]:
         from openfill.sources import list_sources
         selected = self.service.app.settings.fibo_source
@@ -164,6 +182,36 @@ class Api:
         if path == "/api/models/activate":
             entry = app.set_active(str(body["id"]))
             return {"active": entry.id}
+        if path == "/api/models/visibility":
+            model_id, visible = body.get("id"), body.get("visible")
+            if not isinstance(model_id, str) or not 0 < len(model_id) <= 256 or not isinstance(visible, bool):
+                raise ValueError("Provide a model ID and choose whether it is visible.")
+            with self._preferences_lock:
+                hidden = set(app.settings.hidden_models)
+                if visible:
+                    hidden.discard(model_id)
+                else:
+                    hidden.add(model_id)
+                self._save_preference("hidden_models", sorted(hidden))
+            return {"id": model_id, "visible": visible}
+        if path == "/api/layout":
+            layout = normalize_panel_layout(body)
+            with self._preferences_lock:
+                self._save_preference("panel_layout", layout)
+            return layout
+        if path == "/api/references":
+            name, data = body.get("name"), body.get("data")
+            if not isinstance(name, str) or not isinstance(data, str) or len(data) > 4 * ((MAX_UPLOAD + 2) // 3):
+                raise ValueError("Choose a PNG, JPEG or WebP image of up to 16 MB.")
+            try:
+                decoded = base64.b64decode(data, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("The reference image could not be decoded.") from exc
+            return svc.references.add(name, decoded)
+        if path == "/api/references/remove":
+            return svc.references.remove(body.get("id"))
+        if path == "/api/references/order":
+            return svc.references.order(body.get("ids"))
         if path == "/api/models/remove":
             return {"task": svc.uninstall(str(body["id"]))}
         if path == "/api/models/stop":
@@ -185,12 +233,13 @@ class Api:
                 if not math.isfinite(amount):
                     raise ValueError("Auto-feather area must be a finite percentage.")
                 values["auto_feather_percent"] = max(0.0, min(100.0, amount))
-            for key, value in values.items():
-                setattr(app.settings, key, value)
-            if app.settings.remote_fibo:
-                app.settings.autostart = False
-            app.settings.save(app.paths.config)
-            app.reload_settings()
+            with self._preferences_lock:
+                for key, value in values.items():
+                    setattr(app.settings, key, value)
+                if app.settings.remote_fibo:
+                    app.settings.autostart = False
+                app.settings.save(app.paths.config)
+                app.reload_settings()
             return self.settings()
         if path == "/api/comfy/setup":
             return {"task": svc.setup_comfy()}
@@ -265,6 +314,10 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
                     self._json(200, api.sources())
                 elif path == "/api/settings":
                     self._json(200, api.settings())
+                elif path == "/api/layout":
+                    self._json(200, api.layout())
+                elif path == "/api/references":
+                    self._json(200, api.service.reference_rows())
                 elif path == "/api/comfy/preflight":  # what Download ComfyUI would fetch (read-only)
                     self._json(200, api.service.comfy_preflight())
                 elif path == "/api/thumb":
@@ -290,12 +343,18 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
             if not self._authorised():
                 self._send(403, b"forbidden", "text/plain")
                 return
-            length = min(int(self.headers.get("Content-Length") or 0), 1_000_000)
             try:
+                path = urlparse(self.path).path
+                length = int(self.headers.get("Content-Length") or 0)
+                limit = 4 * ((MAX_UPLOAD + 2) // 3) + 4096 if path == "/api/references" else 1_000_000
+                if not 0 <= length <= limit:
+                    self.close_connection = True
+                    self._json(413, {"error": "The request is too large."})
+                    return
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
                     raise ValueError("expected a JSON object")
-                self._json(200, api.post(urlparse(self.path).path, body))
+                self._json(200, api.post(path, body))
             except KeyError as err:
                 self._json(404, {"error": f"unknown request {err}"})
             except Exception as err:  # noqa: BLE001

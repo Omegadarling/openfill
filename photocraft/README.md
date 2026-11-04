@@ -31,6 +31,12 @@ python tools/convert_qwen21_lightning.py diffusion_pytorch_model.safetensors qwe
 
 Both Qwen variants return a masked layer and preserve pixels outside the selection. Leave room in the selection for inserted objects and their shadows. A tight selection can clip the generated object.
 
+### Reference images and panel layout
+
+Choose a reference-capable model and use **Reference Images** to attach PNG, JPEG, or WebP files. The target document is image 1. In a Qwen prompt, use `<image2>`, `<image3>`, and so on for the attachments. FIBO uses `<image_2>`, `<image_3>`, and so on. The reference list shows the current labels and supports reordering and removal. Attachments are kept for the current companion session.
+
+Open **Manage Models** to control which models appear in the main dropdown. Click a section header to expand or collapse it, or drag its grip to move the section. OpenFill saves the section order, collapsed state, and model visibility in your profile.
+
 <img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 
 > **Version 0.2.4** fixes Mac prompt typing and model-menu focus, and lets you reuse ComfyUI's Python with the fallback panel in your default browser. It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. The Mac version passed Fill, Remove, Expand and Create on an M3 MacBook Air; see [the test results](../docs/evidence/macos-photocraft-2026-10-26/).
@@ -54,7 +60,7 @@ Both Qwen variants return a masked layer and preserve pixels outside the selecti
    - **AI engine not found**: press **Download ComfyUI**. It downloads and unpacks in the background (a few minutes) into `%LOCALAPPDATA%\OpenFill\ComfyUI`. With an AMD card it gets ComfyUI's version for AMD cards. If you already have ComfyUI, press **Choose folder** instead and pick the folder that has `main.py` in it (or the portable folder).
    - **No models installed**: press **Open model manager**. LaMa (removing things, 0.2 GB) and DreamShaper 8 Inpainting (fill, expand and create, 2 GB) cover every tool.
 
-The model manager is the gear icon in the OpenFill panel, Models section. The **Open model manager** button on the first run goes there too.
+Open the **Manage Models** section to manage available models. The **Open model manager** button on the first run also opens that section.
 
 If the selected Python has no Tk, the OpenFill panel opens in a tab in your default browser. PhotoCraft stays in its own window. No browser is installed or chosen for you. See [using ComfyUI's Python](#use-comfyuis-python).
 
@@ -128,7 +134,7 @@ While it works you see a live preview. With several variations, click the thumbn
 
 Every result is a new layer with a mask (variations go into a group), and it is **one step** in PhotoCraft's history: one Undo takes a fill or a whole expand back. Keep leaves it one step, and Discard takes it back completely. Your selection stays as it was, and the clipboard is never touched.
 
-The panel stays with PhotoCraft: it hides when PhotoCraft is minimized and comes back with it. The arrow at its top right folds it into a small strip, and a click on the strip opens it again. The gear opens **Models and settings**: install, uninstall and stop downloads under Models, ComfyUI under Engine, and the generation settings under Generation.
+The panel stays with PhotoCraft and hides when PhotoCraft is minimized. The arrow at its top right folds it into a small strip. Expand **Manage Models** to manage model files, **Engine** for ComfyUI settings, or **Generation** for generation settings.
 
 ComfyUI starts in the background when PhotoCraft opens, so the first Generate doesn't wait for it, and it stops when PhotoCraft closes.
 

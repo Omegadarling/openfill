@@ -99,6 +99,19 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .note.bad{color:var(--bad)}.note.ok{color:var(--ok)}.note.dim{color:var(--dim)}
 .spacer{flex:1}
 .foot{padding:0 16px 16px}
+.panel-section{border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.section-head{display:flex;align-items:center;background:var(--panel);min-height:36px}
+.section-toggle{background:none;border:0;text-align:left;flex:1;padding:8px 10px;cursor:pointer;font-weight:600}
+.section-toggle::before{content:"▸";display:inline-block;width:16px;color:var(--dim)}
+.section-toggle[aria-expanded=true]::before{content:"▾"}
+.grip{background:none;border:0;color:var(--dim);font-size:18px;padding:4px 12px;cursor:grab}
+.panel-section.drag-over{border-color:var(--accent)}
+.section-body{padding:12px}
+.reference-row{display:flex;gap:6px;align-items:center}
+.reference-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model-visible{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px}
+.model-visible input{accent-color:var(--accent)}
+#tool-actions{position:sticky;bottom:0;background:var(--bg);z-index:1}
 </style>
 </head>
 <body>
@@ -109,15 +122,15 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     <span class="name">OpenFill</span>
     <span class="status"><span class="dot" id="dot"></span><span id="status">Checking...</span></span>
   </div>
-  <div class="left" id="head-view" hidden>
-    <button class="icon-btn" id="back" aria-label="Back to the tools" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></button>
-    <span class="title">Models and settings</span>
-  </div>
-  <button class="icon-btn" id="gear" aria-label="Models and settings" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </header>
 
-<div id="tools">
-  <div class="content">
+<main id="panel-sections" class="content">
+  <section class="panel-section" data-panel="edit">
+    <div class="section-head">
+      <button type="button" class="section-toggle" aria-controls="body-edit" aria-expanded="true">Image Edit</button>
+      <button type="button" class="grip" draggable="true" aria-label="Reorder Image Edit" title="Drag to reorder, or use the Up and Down arrows">⠿</button>
+    </div>
+    <div id="body-edit" class="section-body stack">
     <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="fill" class="on">Fill</button><button data-mode="remove">Remove</button><button data-mode="expand">Expand</button><button data-mode="txt2img">Create</button></div>
     <div class="context" id="context"><span id="ctx-icon"></span><span id="ctx-text">Connecting to PhotoCraft...</span></div>
     <div class="small" id="remove-text" hidden>Erases what you selected and fills in the background around it.</div>
@@ -146,27 +159,29 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="field"><span class="label">Change amount <span id="str-v">1.00</span></span><input id="strength" type="range" min="0.3" max="1" step="0.05" value="1"></div>
       <div class="field"><span class="label">Seed (empty = random)</span><input id="seed" type="number"></div>
     </div></details>
-    <div class="card" id="setup" hidden></div>
-    <div class="card" id="job" hidden>
-      <div class="head"><span class="t" id="jtitle"></span><span class="r" id="jmodel"></span></div>
-      <div class="bar" id="jbarbox"><i id="jbar"></i></div>
-      <div id="jtext"></div>
-      <img id="preview" alt="Live preview" hidden>
-      <div class="stack" id="pick" hidden style="padding-top:4px"><div class="label">Pick a variation</div><div class="thumbs" id="thumbs"></div></div>
     </div>
-    <div id="notices" class="stack"></div>
-  </div>
-  <div class="actions" id="tool-actions">
-    <button class="primary" id="go">Generate</button>
-    <button class="btn" id="cancel" hidden>Cancel</button>
-    <button class="btn" data-keep="none" hidden>Discard</button><button class="btn" data-keep="all" hidden>Keep all</button><button class="primary" data-keep="selected" hidden>Keep</button>
-  </div>
-</div>
-
-<div id="gearview" hidden>
-  <div class="content">
-    <div class="seg" id="sections" role="group" aria-label="Settings section"><button data-sec="models" class="on">Models</button><button data-sec="engine">Engine</button><button data-sec="generation">Generation</button></div>
+  </section>
+  <section class="panel-section" data-panel="references">
+    <div class="section-head">
+      <button type="button" class="section-toggle" aria-controls="body-references" aria-expanded="true">Reference Images</button>
+      <button type="button" class="grip" draggable="true" aria-label="Reorder Reference Images" title="Drag to reorder, or use the Up and Down arrows">⠿</button>
+    </div>
+    <div id="body-references" class="section-body stack">
+      <div id="reference-help" class="small"></div>
+      <div id="reference-list" class="stack"></div>
+      <button class="btn" id="add-references">Add reference images…</button>
+      <input type="file" id="reference-files" accept="image/png,image/jpeg,image/webp" multiple hidden>
+      <div id="reference-note" class="note" role="status" hidden></div>
+    </div>
+  </section>
+  <section class="panel-section" data-panel="models">
+    <div class="section-head">
+      <button type="button" class="section-toggle" aria-controls="body-models" aria-expanded="false">Manage Models</button>
+      <button type="button" class="grip" draggable="true" aria-label="Reorder Manage Models" title="Drag to reorder, or use the Up and Down arrows">⠿</button>
+    </div>
+    <div id="body-models" class="section-body stack" hidden>
     <div class="stack" id="sec-models" style="gap:12px">
+      <div class="small">Uncheck a model to hide it from the dropdown.</div>
       <div class="small" id="hw">Looking...</div>
       <div class="note" id="mnote" hidden></div>
       <div class="stack" style="gap:6px" id="inst-box"><div class="label">Installed</div><div class="list" id="installed"></div></div>
@@ -174,7 +189,15 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="stack" style="gap:6px"><div class="label">Hugging Face key (for FLUX)</div><div style="display:flex;gap:8px"><input id="token" type="password" placeholder="hf_..." aria-label="Hugging Face key"><button class="btn" id="save-token">Save</button></div></div>
       <div style="height:4px"></div>
     </div>
-    <div class="stack" id="sec-engine" style="gap:12px" hidden>
+    </div>
+  </section>
+  <section class="panel-section" data-panel="engine">
+    <div class="section-head">
+      <button type="button" class="section-toggle" aria-controls="body-engine" aria-expanded="false">Engine</button>
+      <button type="button" class="grip" draggable="true" aria-label="Reorder Engine" title="Drag to reorder, or use the Up and Down arrows">⠿</button>
+    </div>
+    <div id="body-engine" class="section-body stack" hidden>
+    <div class="stack" id="sec-engine" style="gap:12px">
       <div class="field"><span class="label">ComfyUI folder</span><input id="s-comfy_dir" type="text" aria-label="ComfyUI folder"></div>
       <label class="check"><input type="checkbox" id="s-autostart"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>Start the AI engine with PhotoCraft</span></label>
       <div class="field"><span class="label">Stop after idle</span><div style="display:flex;gap:8px;align-items:center"><input id="s-idle_timeout_minutes" type="number" style="width:72px" aria-label="Stop after idle, minutes"><span class="small">minutes, 0 = never</span></div></div>
@@ -182,7 +205,16 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="divider"></div>
       <div class="stack"><div class="label">Engine</div><div style="display:flex;gap:8px"><button class="btn" id="check">Check</button><button class="btn" id="stop">Stop engine</button><button class="btn" id="logs">Logs</button></div><div class="note dim" id="check-out" hidden></div></div>
     </div>
-    <div class="stack" id="sec-generation" style="gap:12px" hidden>
+      <button class="btn" id="save-engine">Save engine settings</button>
+    </div>
+  </section>
+  <section class="panel-section" data-panel="generation">
+    <div class="section-head">
+      <button type="button" class="section-toggle" aria-controls="body-generation" aria-expanded="false">Generation</button>
+      <button type="button" class="grip" draggable="true" aria-label="Reorder Generation" title="Drag to reorder, or use the Up and Down arrows">⠿</button>
+    </div>
+    <div id="body-generation" class="section-body stack" hidden>
+    <div class="stack" id="sec-generation" style="gap:12px">
       <div class="grid2" data-legacy-generation><div class="field"><span class="label">Steps</span><input id="s-steps" type="number"></div><div class="field"><span class="label">Prompt strictness (CFG)</span><input id="s-cfg" type="number" step="0.5"></div></div>
       <div class="grid2" data-legacy-generation><div class="field"><span class="label">Repaint margin (%)</span><input id="s-grow_percent" type="number"></div><div class="field"><span class="label">Edge softness (%)</span><input id="s-feather_percent" type="number"></div></div>
       <div class="small" data-legacy-generation>Steps: more is slower and finer. Strictness: how closely the prompt is followed. Margin: how far past the selection the fill may repaint, as a share of its size.</div>
@@ -202,10 +234,26 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       </div>
       <div class="note" id="gen-out" hidden></div>
     </div>
+      <button class="btn" id="save-settings">Save generation settings</button>
+    </div>
+  </section>
+</main>
+<div class="content" id="result-area">
+    <div class="card" id="setup" hidden></div>
+    <div class="card" id="job" hidden>
+      <div class="head"><span class="t" id="jtitle"></span><span class="r" id="jmodel"></span></div>
+      <div class="bar" id="jbarbox"><i id="jbar"></i></div>
+      <div id="jtext"></div>
+      <img id="preview" alt="Live preview" hidden>
+      <div class="stack" id="pick" hidden style="padding-top:4px"><div class="label">Pick a variation</div><div class="thumbs" id="thumbs"></div></div>
+    </div>
+    <div id="notices" class="stack"></div>
   </div>
-  <div class="actions" id="save-bar" hidden><button class="primary" id="save-settings">Save</button></div>
-</div>
-
+  <div class="actions" id="tool-actions">
+    <button class="primary" id="go">Generate</button>
+    <button class="btn" id="cancel" hidden>Cancel</button>
+    <button class="btn" data-keep="none" hidden>Discard</button><button class="btn" data-keep="all" hidden>Keep all</button><button class="primary" data-keep="selected" hidden>Keep</button>
+  </div>
 <div class="spacer"></div>
 <div class="foot small">Browser view: the same tools when the panel cannot open a window. Expand uses pixel margins here instead of the drag editor.</div>
 </div>
@@ -232,38 +280,210 @@ const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0
 const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
-let mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="", remoteFibo=false, backendSource="";
+let mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="", remoteFibo=false, backendSource="";
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
 $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
 $("vars").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("vars"),b);variations=+b.textContent}};
 $("sizes").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("sizes"),b);size=[+b.dataset.w,+b.dataset.h];$("size-px").textContent=`${size[0]} x ${size[1]} px`}};
 $("targets").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("targets"),b);target=b.dataset.target}};
-$("sections").onclick=e=>{const b=e.target.closest("button");if(b)showSection(b.dataset.sec)};
-$("gear").onclick=()=>gear?showTools():showGear(section);
-$("back").onclick=()=>showTools();
 function setMode(m){if(remoteFibo)m="fill";mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
   $("remove-text").hidden=m!=="remove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove";
   $("advanced").hidden=remoteFibo||m!=="fill";$("prompt").placeholder=remoteFibo?"Qwen and FIBO: describe the change. SDXL: describe what should appear in the selection. Select All to edit the whole image.":PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets()}
-function showTools(){gear=false;$("tools").hidden=false;$("gearview").hidden=true;$("head-tools").hidden=false;$("head-view").hidden=true;$("gear").classList.remove("on")}
-function showGear(s){gear=true;$("tools").hidden=true;$("gearview").hidden=false;$("head-tools").hidden=true;$("head-view").hidden=false;$("gear").classList.add("on");showSection(s||"models")}
-function showSection(s){section=s;segPick($("sections"),$("sections").querySelector(`[data-sec="${s}"]`));
-  ["models","engine","generation"].forEach(n=>$("sec-"+n).hidden=n!==s);$("save-bar").hidden=s==="models";
-  if(s==="models")loadModels();else loadSettings()}
+const sections = new Map([...document.querySelectorAll("[data-panel]")].map(el => [el.dataset.panel, el]));
+let layout = {order: [...sections.keys()], collapsed: ["models", "engine", "generation"]};
+let layoutRevision = 0, layoutQueue = Promise.resolve(), dragged = null;
+function drawLayout() {
+  for (const id of layout.order) {
+    const node = sections.get(id);
+    $("panel-sections").append(node);
+    const open = !layout.collapsed.includes(id);
+    node.querySelector(".section-toggle").setAttribute("aria-expanded", String(open));
+    $("body-"+id).hidden = !open;
+  }
+}
+function saveLayout(next) {
+  layout = next;
+  drawLayout();
+  const revision = ++layoutRevision;
+  layoutQueue = layoutQueue.then(async () => {
+    try {
+      await post("/api/layout", next);
+    } catch (e) {
+      say(e.message, "bad");
+      if (revision === layoutRevision) {
+        try { layout = await get("/api/layout"); drawLayout(); } catch (_) {}
+      }
+    }
+  });
+}
+function toggleSection(id, open) {
+  const collapsed = new Set(layout.collapsed);
+  if (open) collapsed.delete(id); else collapsed.add(id);
+  saveLayout({order: layout.order, collapsed: [...collapsed]});
+  if (open && id === "models") loadModels();
+}
+function openSection(id) {
+  if (layout.collapsed.includes(id)) toggleSection(id, true);
+  sections.get(id).scrollIntoView({block: "nearest"});
+}
+function moveSection(id, index) {
+  const order = layout.order.filter(key => key !== id);
+  order.splice(index, 0, id);
+  saveLayout({order, collapsed: layout.collapsed});
+}
+for (const [id, node] of sections) {
+  node.querySelector(".section-toggle").onclick = () => toggleSection(id, layout.collapsed.includes(id));
+  const grip = node.querySelector(".grip");
+  grip.ondragstart = event => {
+    dragged = id;
+    event.dataTransfer.setData("text/plain", id);
+    event.dataTransfer.effectAllowed = "move";
+  };
+  grip.ondragend = () => {
+    dragged = null;
+    for (const section of sections.values()) section.classList.remove("drag-over");
+  };
+  grip.onkeydown = event => {
+    const direction = {"ArrowUp": -1, "ArrowDown": 1}[event.key];
+    if (!direction) return;
+    event.preventDefault();
+    const index = layout.order.indexOf(id) + direction;
+    if (index >= 0 && index < layout.order.length) { moveSection(id, index); grip.focus(); }
+  };
+  node.ondragover = event => {
+    if (!dragged || dragged === id) return;
+    event.preventDefault();
+    node.classList.add("drag-over");
+  };
+  node.ondragleave = event => {
+    if (!node.contains(event.relatedTarget)) node.classList.remove("drag-over");
+  };
+  node.ondrop = event => {
+    node.classList.remove("drag-over");
+    if (!dragged || dragged === id) return;
+    event.preventDefault();
+    const bounds = node.getBoundingClientRect();
+    const index = layout.order.filter(key => key !== dragged).indexOf(id);
+    moveSection(dragged, index + (event.clientY > bounds.top + bounds.height / 2 ? 1 : 0));
+    dragged = null;
+  };
+}
+
+let referenceRows = [], attaching = false;
+const chosenModel = () => models.find(row => row.id === $("model").value);
+const referenceLimit = () => mode === "fill" ? chosenModel()?.max_references || 0 : 0;
+function referenceNote(message) {
+  const note = $("reference-note");
+  note.textContent = message;
+  note.hidden = !message;
+  note.className = "note bad";
+}
+async function changeReferences(path, body) {
+  try {
+    referenceRows = await post(path, body);
+    referenceNote("");
+    drawReferences();
+  } catch (e) {
+    referenceNote(e.message);
+    await loadReferences();
+  }
+}
+async function loadReferences() {
+  try {
+    const rows = await get("/api/references");
+    if (Array.isArray(rows) && JSON.stringify(rows) !== JSON.stringify(referenceRows)) {
+      referenceRows = rows;
+      drawReferences();
+    }
+  } catch (_) {}
+}
+function moveReference(index, shift) {
+  const ids = referenceRows.map(row => row.id);
+  const other = index + shift;
+  [ids[index], ids[other]] = [ids[other], ids[index]];
+  changeReferences("/api/references/order", {ids});
+}
+function drawReferences() {
+  const limit = referenceLimit();
+  const syntax = chosenModel()?.reference_syntax || "";
+  $("reference-help").textContent = limit
+    ? "The target is " + syntax.replace("N", "1") + ". Attached files start at " + syntax.replace("N", "2") + " in the order shown."
+    : "Choose a reference-capable edit model. Attached files are kept for this session.";
+  $("add-references").disabled = attaching || !limit || referenceRows.length >= limit;
+  const list = $("reference-list");
+  list.replaceChildren(...referenceRows.map((reference, index) => {
+    const row = document.createElement("div");
+    row.className = "reference-row";
+    const name = document.createElement("span");
+    name.className = "reference-name";
+    name.textContent = (syntax ? syntax.replace("N", String(index+2)) : String(index+2)) + "  " + reference.name;
+    name.title = reference.name;
+    row.append(name);
+    for (const [label, text, disabled, callback] of [
+      ["Move reference up", "↑", index === 0, () => moveReference(index, -1)],
+      ["Move reference down", "↓", index === referenceRows.length-1, () => moveReference(index, 1)],
+      ["Remove reference", "×", false, () => changeReferences("/api/references/remove", {id: reference.id})],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "icon-btn";
+      button.setAttribute("aria-label", label + ": " + reference.name);
+      button.textContent = text;
+      button.disabled = disabled;
+      button.onclick = callback;
+      row.append(button);
+    }
+    return row;
+  }));
+}
+function fileData(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",", 2)[1]);
+    reader.onerror = () => reject(new Error("Could not read " + file.name));
+    reader.readAsDataURL(file);
+  });
+}
+$("add-references").onclick = () => $("reference-files").click();
+$("reference-files").onchange = async event => {
+  const files = [...event.target.files];
+  event.target.value = "";
+  if (!files.length) return;
+  if (files.length + referenceRows.length > referenceLimit()) {
+    referenceNote("There are more images than this model can use.");
+    return;
+  }
+  attaching = true;
+  drawReferences();
+  try {
+    for (const file of files) {
+      if (file.size > 16 * 1024 * 1024) throw new Error(file.name + " exceeds 16 MB.");
+      referenceRows = await post("/api/references", {name: file.name, data: await fileData(file)});
+    }
+    referenceNote("");
+  } catch (e) {
+    referenceNote(e.message);
+  } finally {
+    attaching = false;
+    drawReferences();
+  }
+};
 
 $("prompt").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();$("go").click()}};
 $("strength").oninput=()=>$("str-v").textContent=(+$("strength").value).toFixed(2);
 $("model").onchange=async()=>{const v=$("model").value;
-  if(v==="__manage"){fillSelect();showGear("models");return}
+  if(v==="__manage"){delete $("model").dataset.key;fillSelect();openSection("models");return}
+  drawReferences();
   if(mode==="remove"){removal=v;return}
   if(v&&v!==activeId&&!removers().has(v)){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
 function seedOf(){const v=$("seed").value.trim();return v===""?-1:parseInt(v)}
 function say(t,kind){note=t?{text:t,kind:kind||"bad",base:baseContext()[0]}:null;context()}
 async function start(kind,body){try{await post("/api/"+kind,body);lastSeq=-1;say("")}catch(e){say(e.message,"bad")}}
-$("go").onclick=()=>{if(busy)return;const prompt=$("prompt").value.trim(),model=$("model").value||"active";
+$("go").onclick=()=>{if(busy||!$("model").value||$("model").value==="__manage")return;const prompt=$("prompt").value.trim(),model=$("model").value;
   if(mode==="fill"||mode==="remove"){if(!sel){say(NO_SEL,"bad");return}
     const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:remoteFibo?undefined:(mode==="fill"?+$("strength").value:1),seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
-    if(mode==="remove"){b.removal=model;b.model="active";if(["default",...PROMPT_FREE].includes(model))b.variations=1}else b.model=model;
+    if(mode==="remove"){b.removal=model;b.model="active";if(["default",...PROMPT_FREE].includes(model))b.variations=1}else{b.model=model;b.useReferences=referenceLimit()>0&&referenceRows.length>0}
     start("fill",b)}
   else if(mode==="expand"){const m=["left","top","right","bottom"].map(k=>+$("e-"+k).value);if(!m.some(Boolean)){say("Enter the pixels to add on each side, or pick a ratio.","bad");return}
     start("expand",{prompt,negative:"",left:m[0],top:m[1],right:m[2],bottom:m[3],variations,seed:-1,model})}
@@ -290,7 +510,7 @@ function context(){let[t,k,i]=baseContext();if(note){if(note.base!==t)note=null;
 
 // LaMa and MAT give the same result for the same input; the first one installed is Remove's default (full resolution).
 const PROMPT_FREE=["lama-big","mat-places512"];
-function usable(){return models.filter(r=>r.installed&&r.runnable&&!(r.missing_models||[]).length&&!(r.missing_nodes||[]).length)}
+function usable(){return models.filter(r=>r.visible!==false&&r.installed&&r.runnable&&!(r.missing_models||[]).length&&!(r.missing_nodes||[]).length)}
 function removers(){return new Set(usable().filter(r=>(r.capabilities||[]).includes("remove")).map(r=>r.id))}
 function removalChoices(){const inst=usable(),rem=inst.filter(r=>(r.capabilities||[]).includes("remove")),ids=new Set(rem.map(r=>r.id));
   const painters=inst.filter(r=>(r.capabilities||[]).includes("fill")&&!ids.has(r.id)).sort((a,b)=>(a.id!==activeId)-(b.id!==activeId));
@@ -305,10 +525,10 @@ function fillSelect(){const s=$("model");let opts;
     if(mode==="fill")inst.filter(r=>(r.capabilities||[]).includes("remove")&&!(r.capabilities||[]).includes("fill")).forEach(r=>opts.push([r.name,r.id]))}
   const want=mode==="remove"?(opts.some(o=>o[1]===removal)?removal:(opts[0]||[])[1]):(opts.some(o=>o[1]===activeId)?activeId:(opts[0]||[])[1]);
   const key=JSON.stringify([opts,want]);if(s.dataset.key===key)return;s.dataset.key=key;
-  s.innerHTML="";if(!opts.length){const o=document.createElement("option");o.value="";o.textContent=models.length||!comfy?"No models installed":"Checking...";s.appendChild(o)}
+  s.innerHTML="";if(!opts.length){const o=document.createElement("option");o.value="";o.textContent=models.some(r=>r.installed&&r.runnable)?"No visible models":models.length||!comfy?"No models installed":"Checking...";s.appendChild(o)}
   for(const[label,value]of opts){const o=document.createElement("option");o.value=value;o.textContent=label;s.appendChild(o)}
   s.appendChild(document.createElement("hr"));const m=document.createElement("option");m.value="__manage";m.textContent="Manage models...";s.appendChild(m);
-  s.value=want||"";$("go").disabled=busy||!opts.length}
+  s.value=want||"";$("go").disabled=busy||!opts.length;drawReferences()}
 
 function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.statusText||"").startsWith("Downloading"))||models.find(r=>r.statusText==="Waiting");
   if(!s.comfyReady&&s.remoteFibo)html=`<div class="head">${svg("warn",C.warn)}<span class="t">${esc(s.backendName)} is unavailable</span></div><div class="small">${esc(s.comfyProblem||"Start ComfyUI on the selected computer, then press Check.")}</div>`;
@@ -316,13 +536,13 @@ function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.
   else if(dl){const pct=dl.statusText.startsWith("Downloading")?parseInt(dl.statusText.split(" ").pop()):0;html=`<div class="head">${svg("download",C.accent)}<span class="t">Downloading ${esc(short(dl.name))}</span><span class="r">${pct}%</span></div><div class="bar"><i style="width:${pct}%"></i></div><div class="small">You can keep working.</div>`}
   else if(models.length&&!models.some(r=>r.installed&&r.runnable&&(r.capabilities||[]).includes("fill")))html=`<div class="head">${svg("warn",C.warn)}<span class="t">No models installed</span></div><div class="small">Install at least one model to start. LaMa and DreamShaper 8 (2.2 GB) cover every tool.</div><div style="display:flex"><button class="btn accent flex" id="setup-models">Open model manager</button></div>`;
   if(c.dataset.html!==html){c.dataset.html=html;c.innerHTML=html;c.hidden=!html;
-    if($("setup-folder"))$("setup-folder").onclick=()=>{showGear("engine");$("s-comfy_dir").focus()};if($("setup-help"))$("setup-help").onclick=()=>window.open("https://github.com/beckettharriman/openfill/blob/main/docs/install.md#openfill-for-photocraft");if($("setup-models"))$("setup-models").onclick=()=>showGear("models")}}
+    if($("setup-folder"))$("setup-folder").onclick=()=>{openSection("engine");$("s-comfy_dir").focus()};if($("setup-help"))$("setup-help").onclick=()=>window.open("https://github.com/beckettharriman/openfill/blob/main/docs/install.md#openfill-for-photocraft");if($("setup-models"))$("setup-models").onclick=()=>openSection("models")}}
 
 function fmt(s){s=Math.round(s);return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")}
 async function tick(){
   let s;try{s=await get("/api/state")}catch(e){$("status").textContent="OpenFill stopped";return}
   if(s.remoteFibo&&!remoteFibo){remoteFibo=true;document.querySelectorAll("[data-mode]").forEach(b=>{b.hidden=b.dataset.mode!=="fill";if(!b.hidden)b.textContent="Image Edit"});
-    $("token").closest(".stack").hidden=true;$("stop").hidden=true;
+    $("token").closest(".stack").hidden=true;$("stop").hidden=true;$("save-engine").hidden=true;
     Array.from($("sec-engine").children).slice(0,5).forEach(e=>e.hidden=true);
     const remote=document.createElement("div");remote.className="stack";remote.innerHTML='<label class="field"><span class="label">Run edits on</span><select id="fibo-source" aria-label="ComfyUI source"></select></label><div class="small" id="source-detail"></div><div class="small">Start ComfyUI on the chosen computer. OpenFill connects to that source and lists its available Qwen, FIBO, and SDXL edit models.</div>';$("sec-engine").prepend(remote);
     const sources=await get("/api/sources");$("fibo-source").replaceChildren(...sources.sources.map(src=>{const option=document.createElement("option");option.value=src.id;option.textContent=src.name;return option}));
@@ -331,7 +551,7 @@ async function tick(){
     const defaults=document.createElement("div");defaults.className="small";defaults.textContent="Qwen Image 2.1: describe the change and what to keep. Lightning v2 RL uses its own four-step schedule. FIBO: describe the change; Turbo 4 steps / CFG 1, Dev 30 steps / CFG 5. SDXL: describe the desired selected content; 25 steps / CFG 6, DPM++ 2M/Karras, 75% change strength. Pixels outside the selection are preserved.";$("sec-generation").prepend(defaults);setMode("fill")}
   if(s.pick){if(lastPick<0)lastPick=s.pick.seq;else if(s.pick.seq!==lastPick){lastPick=s.pick.seq;
     location.hash="#"+(s.pick.action==="panel"?"fill":s.pick.action);window.focus();if(s.pick.action!=="remove")$("prompt").focus();if(s.pick.action==="remove"&&!s.busy)$("go").click()}}
-  if(remoteFibo){if(backendSource!==s.backendSource){models=[];fillSelect();}backendSource=s.backendSource;$("fibo-source").value=s.backendSource;$("fibo-source").disabled=s.busy;$("source-detail").textContent=s.backendName+" · "+s.backendUrl;$("save-bar").hidden=!(gear&&section==="generation");}
+  if(remoteFibo){if(backendSource!==s.backendSource){models=[];fillSelect();}backendSource=s.backendSource;$("fibo-source").value=s.backendSource;$("fibo-source").disabled=s.busy;$("source-detail").textContent=s.backendName+" · "+s.backendUrl;}
   pc=s.photocraft||{};doc=pc.document||null;sel=pc.selection||null;comfy=s.comfyReady;
   if(s.activeModel!==activeId){activeId=s.activeModel||"";fillSelect()}
   const st=!comfy?["Not set up","warn"]:["Ready","ok"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
@@ -371,16 +591,18 @@ function detail(r){if(r.template==="sdxl_edit")return "SDXL masked editing · de
 function mnote(t,kind){const n=$("mnote");n.hidden=!t;n.textContent=t||"";n.className="note "+(kind||"bad")}
 async function act(fn){try{await fn();mnote("")}catch(e){mnote(e.message,"bad")}loadModels()}
 async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}if(remoteFibo&&m.source!==backendSource)return;models=m.rows||[];$("hw").textContent=m.hardware||m.error||"";
-  fillSelect();if(!gear||section!=="models")return;
+  fillSelect();if(layout.collapsed.includes("models"))return;
   const inst=models.filter(r=>r.installed).sort((a,b)=>(!a.runnable)-(!b.runnable)||(!a.active)-(!b.active)||a.name.localeCompare(b.name));
   const avail=models.filter(r=>!r.installed&&r.runnable).sort((a,b)=>a.name.localeCompare(b.name));
   const row=(r)=>{const st=r.statusText||"";let right="",extra="";const busyRow=/^(Downloading|Waiting)/.test(st);
     if(r.installed){if((r.missing_models||[]).length)right=`<button class="btn" data-get="${r.id}">Download</button>`;else if(/^(Removing|Installing|Working)/.test(st))right=`<span class="pct">${esc(st)}</span>`;else if(r.runnable&&!r.remote)right=`<button class="icon-btn" data-remove="${r.id}" aria-label="Uninstall ${esc(r.name)}">${svg("trash","currentColor")}</button>`}
     else if(busyRow){const pct=st.startsWith("Downloading")?st.split(" ").pop():"Waiting";right=`<span class="pct">${pct}</span><button class="icon-btn" data-stop="${r.id}" aria-label="Stop downloading">${svg("close","currentColor")}</button>`;if(st.startsWith("Downloading"))extra=`<div class="bar"><i style="width:${parseInt(pct)||0}%"></i></div>`}
     else right=`<button class="btn" data-get="${r.id}">${r.partial?"Resume":"Download"}</button>`;
+    if(r.installed&&r.runnable)right='<label class="model-visible"><input type="checkbox" data-visible="'+esc(r.id)+'" aria-label="Show '+esc(r.name)+' in model dropdown" '+(r.visible!==false?'checked':'')+'>Show</label>'+right;
     const det=r.installed&&!r.runnable?[r.neededBy||"Needed by other models",r.size].join(" · "):detail(r)+((r.missing_models||[]).length?" · Needs one more download":"");
     return `<div class="mrow"><div class="top"><div class="names"><div>${esc(r.name)}</div><div class="small">${esc(det)}</div></div>${right}</div>${extra}</div>`};
   $("installed").innerHTML=inst.map(row).join("");$("inst-box").hidden=!inst.length;$("available").innerHTML=avail.map(row).join("");$("avail-box").hidden=!avail.length;
+  document.querySelectorAll("[data-visible]").forEach(box=>box.onchange=()=>{box.disabled=true;act(()=>post("/api/models/visibility",{id:box.dataset.visible,visible:box.checked}))});
   document.querySelectorAll("[data-get]").forEach(b=>b.onclick=()=>act(()=>post("/api/models/download",{id:b.dataset.get})));
   document.querySelectorAll("[data-stop]").forEach(b=>b.onclick=()=>act(()=>post("/api/models/stop",{id:b.dataset.stop})));
   document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=()=>{const r=models.find(x=>x.id===b.dataset.remove);if(confirm(`Uninstall ${short(r.name)}? Its files (${r.size}) are deleted. Files other models use are kept.`))act(()=>post("/api/models/remove",{id:r.id}))})}
@@ -391,17 +613,33 @@ $("s-auto_feather").onchange=syncAutoFeather;$("s-auto_feather_percent").oninput
 function syncFiboOptions(){const full=$("s-fibo_context_mode").value==="full",amount=+$("s-fibo_context_percent").value;$("fibo-mode-help").textContent=$("s-fibo_edit_mode").value==="preserve"?"Starts from the original pixels and limits regeneration to the selection, retaining more of the existing structure. Some details may still change.":"Rebuild the selected content using its surroundings. Original details inside may be replaced.";$("s-fibo_context_percent").disabled=full;$("fibo-context-value").textContent=amount+"%";$("fibo-context-help").textContent=full?"Use the full image as context. Small selections may lose fine detail at the model's working resolution.":`Include a margin on each side equal to ${amount}% of the selection's larger dimension. The editable area stays the same.`;$("s-fibo_boundary_strength").disabled=!$("s-fibo_boundary_match").checked;$("fibo-boundary-value").textContent=$("s-fibo_boundary_strength").value+"%"}
 $("s-fibo_edit_mode").onchange=syncFiboOptions;$("s-fibo_context_mode").onchange=syncFiboOptions;$("s-fibo_context_percent").oninput=syncFiboOptions;$("s-fibo_boundary_match").onchange=syncFiboOptions;$("s-fibo_boundary_strength").oninput=syncFiboOptions;
 async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}syncAutoFeather();syncFiboOptions()}
-function settingsNote(t,kind){const n=section==="generation"?$("gen-out"):$("check-out");n.hidden=!t;n.textContent=t;n.className="note "+(kind||"dim")}
-$("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(["number","range"].includes(el.type)?+el.value:el.value)});
-  try{await post("/api/settings",b);settingsNote("Settings saved.","ok")}catch(e){settingsNote(e.message,"bad")}};
+function settingsNote(t,kind,id="check-out"){const n=$(id);n.hidden=!t;n.textContent=t;n.className="note "+(kind||"dim")}
+$("save-settings").onclick=async()=>{const b={};document.querySelectorAll("#sec-generation [id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(["number","range"].includes(el.type)?+el.value:el.value)});
+  try{await post("/api/settings",b);settingsNote("Settings saved.","ok","gen-out")}catch(e){settingsNote(e.message,"bad","gen-out")}};
 $("check").onclick=async()=>{settingsNote(remoteFibo?"Checking the selected ComfyUI source...":"Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
 $("stop").onclick=async()=>{const r=await post("/api/backend/stop");settingsNote(r.message,"dim")};
 $("logs").onclick=()=>post("/api/logs");
+$("save-engine").onclick=async()=>{
+  const keys=["comfy_dir","autostart","idle_timeout_minutes","extra_server_args"];
+  const body=Object.fromEntries(keys.map(key=>{const input=$("s-"+key);return [key,input.type==="checkbox"?input.checked:input.value]}));
+  try { await post("/api/settings",body); settingsNote("Engine settings saved.","ok"); }
+  catch(e) { settingsNote(e.message,"bad"); }
+};
 
-function openTab(){const h=location.hash.slice(1);const want={t2i:"txt2img",panel:"fill",models:"models",settings:"engine"}[h]||h;
-  if(want==="models"||want==="engine"||want==="generation")showGear(want);else if(GO[want]){showTools();setMode(want)}}
-window.addEventListener("hashchange",openTab);setMode("fill");openTab();
-loadModels().catch(()=>{});setInterval(tick,700);tick();setInterval(()=>loadModels(),3000);
+function openTab(){
+  const h=location.hash.slice(1);
+  const want={t2i:"txt2img",panel:"fill",settings:"engine"}[h]||h;
+  if(sections.has(want))openSection(want);
+  else if(GO[want]){setMode(want);openSection("edit")}
+}
+window.addEventListener("hashchange",openTab);
+setMode("fill");
+get("/api/layout").then(saved=>{if(!layoutRevision){layout=saved;drawLayout()}}).catch(()=>{}).finally(openTab);
+loadSettings().catch(()=>{});
+loadModels().catch(()=>{});
+loadReferences();
+setInterval(tick,700);tick();
+setInterval(()=>{loadModels();loadReferences()},3000);
 </script>
 </body>
 </html>
