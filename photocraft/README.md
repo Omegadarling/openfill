@@ -25,9 +25,11 @@ If the connection succeeds and your model is missing, check that the server sees
 ### Remove an object
 
 1. Lasso the whole object, its shadow or reflection, and a narrow margin of background. Leave some unselected background for OpenFill to sample.
-2. Choose **Remove** in the OpenFill panel. Start with **Nearby texture (PhotoCraft)** for surfaces such as water, grass, or a wall. It runs in PhotoCraft and works with ComfyUI offline.
+2. Choose **Remove** in the OpenFill panel. Start with **Local removal (automatic)**. It continues smooth background shading or uses PhotoCraft's content-aware fill for texture. It works with ComfyUI offline.
 3. Press **Remove** and inspect the thumbnail. When the fill needs new detail, choose **Rebuild background (FIBO Dev)** and press **Remove** again to compare. PhotoCraft first fills the hole from nearby pixels. FIBO proposes detail for the selected area, and OpenFill matches its edge colors to the surrounding image. If a proposal differs sharply in color across much of the hole, OpenFill keeps the sampled fill and tells you which variation used it. The method appears when the server has the Dev checkpoint and its original encoder, and the Dev model is visible in **Manage Models**.
 4. Choose **Keep** under the result you want, or **Discard** to return to the original.
+
+Remove adds a small, softly blended margin around the selection to clear outlines. The original selection stays available. Include cast shadows in the selection when they should be removed too. Smooth backgrounds produce one deterministic repair.
 
 ### Connect to ComfyUI on your LAN
 
@@ -217,7 +219,7 @@ The managed engine also scans your own model files. Put compatible SD 1.5 inpain
 
 ## Known limits
 
-Nearby texture and managed LaMa work at the crop's native resolution. FIBO Dev reconstructs the crop at its trained resolution of about one megapixel, so large repairs can look softer than the surrounding image.
+Local texture synthesis and managed LaMa work at the crop's native resolution. Smooth-background completion estimates the lighting at a smaller working size and restores it to the crop dimensions. FIBO Dev reconstructs the crop at its trained resolution of about one megapixel, so large repairs can look softer than the surrounding image.
 
 - **Fill** with SD 1.5 or SDXL works at no less than 60 % (SD 1.5) or 75 % (SDXL) of full resolution, in overlapping windows when the selection is large. With **FLUX** or Qwen there are no windows yet: a large selection is drawn at about 1024 px on its long side and scaled up, so a 2000 px selection comes back at about half resolution.
 - **Expand** draws the new area in one pass at about 1024 px with every model and scales it up: on a 3000 px canvas the new edges are drawn at about a third of full resolution and look soft. Expand in rounds on big images.

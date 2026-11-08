@@ -465,7 +465,7 @@ class Bar:
         self.context = ui.small(self.context_row, "", wrap=CW - 20)
         self.context.pack(side="left", padx=(6, 0), fill="x")
         self.remove_line = ui.small(
-            m, "Select the whole object and its shadow, with a little background around them.", wrap=CW
+            m, "Select the object and its shadow. Remove includes a small edge margin to clear outlines.", wrap=CW
         )
 
         from .expand_view import ExpandView

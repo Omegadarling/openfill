@@ -174,7 +174,7 @@ class InlinePanelTests(unittest.TestCase):
         bar.prompt.set("An edit I am still writing")
         bar.refresher.get.return_value = {"error": "ComfyUI is offline", "comfy_ok": False}
         bar.tab_buttons["remove"].invoke()
-        self.assertEqual(bar.model_box.values, ["Nearby texture (PhotoCraft)"])
+        self.assertEqual(bar.model_box.values, ["Local removal (automatic)"])
         self.assertFalse(bar.go.disabled)
         self.assertFalse(bar.prompt.winfo_manager())
         self.assertEqual(bar.model_label.get(), "Method")
@@ -194,7 +194,7 @@ class InlinePanelTests(unittest.TestCase):
         facts["models"]["remove"] = [("fibo", "FIBO Dev"), ("hidden", "Hidden FIBO")]
         self.service.app.settings.hidden_models = ["hidden"]
         bar.select_tab("remove")
-        self.assertEqual(bar.model_box.values, ["Nearby texture (PhotoCraft)", "FIBO Dev"])
+        self.assertEqual(bar.model_box.values, ["Local removal (automatic)", "FIBO Dev"])
         bar._model_picked("FIBO Dev")
         bar.generate()
         self.assertEqual(self.service.start.call_args.args[1]["removal"], "fibo")

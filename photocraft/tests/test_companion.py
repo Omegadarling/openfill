@@ -384,6 +384,7 @@ class BridgeTests(unittest.TestCase):
 
         with (
             mock.patch.object(self.pc, "run", side_effect=fail_fill),
+            mock.patch("openfill_photocraft.bridge.smooth_background", return_value=None),
             self.assertRaisesRegex(control.ControlError, "fill failed"),
         ):
             self.bridge.remove_with_texture(self.image, 1, 42, mock.Mock(), lambda: False)
@@ -1055,7 +1056,7 @@ class BarLogicTests(unittest.TestCase):
         self.assertNotIn("refine:realvisxl-v5", choices.values())  # no two-pass Remove any more
         only_painters = {"active": "", "models": {"fill": self.FACTS["models"]["fill"]}}
         self.assertNotIn("default", removal_choices(only_painters).values())
-        self.assertEqual(removal_choices({}), {"Nearby texture (PhotoCraft)": "photocraft-texture"})
+        self.assertEqual(removal_choices({}), {"Local removal (automatic)": "photocraft-texture"})
 
     def test_fill_menu_also_offers_the_removal_models(self):
         try:

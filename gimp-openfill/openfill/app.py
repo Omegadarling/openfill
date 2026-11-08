@@ -912,7 +912,7 @@ class App:
         selection_edit = model.effective_template in workflow.SELECTION_EDIT_TEMPLATES
         fibo_edit = model.effective_template == "fibo2_edit"
         if rebuild_background and (not fibo_edit or entry is None or "remove" not in entry.capabilities):
-            raise BackendError("Choose Nearby texture or Rebuild background (FIBO Dev) in Remove.")
+            raise BackendError("Choose Local removal or Rebuild background (FIBO Dev) in Remove.")
         # Options saved while this job runs apply to the next edit. Freeze all
         # context/mode/blend values before exporting pixels or entering inference.
         fibo_mode = self.settings.fibo_edit_mode
@@ -1036,6 +1036,9 @@ class App:
         mask_png, mask_raw = self.io.export_selection_mask(image, ctx)
         if rebuild_background and 0 not in mask_raw:
             raise BackendError("Leave some background outside the selection so OpenFill can reconstruct it.")
+        if rebuild_background:
+            mask_raw = self.io.prepare_removal_mask(ctx.size, mask_raw)
+            mask_png = png.encode(ctx.width, ctx.height, mask_raw, 1)
         layer_mask = mask_raw if rebuild_background else None
         if selection_edit and auto_feather and auto_feather_percent > 0:
             from .auto_feather import feather_selection

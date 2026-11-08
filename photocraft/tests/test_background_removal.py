@@ -30,6 +30,7 @@ class BackgroundRemovalTests(unittest.TestCase):
         app.io.export_region.return_value = b"original PNG", bytes(80 * 64 * 4)
         self.alpha = bytes([0, 63, 255, 0]) * (80 * 64 // 4)
         app.io.export_selection_mask.return_value = b"selection", self.alpha
+        app.io.prepare_removal_mask.side_effect = lambda _size, pixels: pixels
         app.io.removal_guide.return_value = b"clean plate PNG"
         app.io.insert_results.return_value = []
         self.entry = SimpleNamespace(name="FIBO Dev", id="dev", capabilities=("fill", "edit", "remove"))
@@ -46,9 +47,7 @@ class BackgroundRemovalTests(unittest.TestCase):
         app = self.app
         app.generative_fill(object(), "", "", 1, 1, 25, "dev", remove=True)
         req = app.backend.return_value.inpaint.call_args.args[0]
-        self.assertEqual(
-            (req.image_png, req.mask_png, req.fibo_edit_mode), (b"clean plate PNG", b"selection", "background")
-        )
+        self.assertEqual((req.image_png, req.fibo_edit_mode), (b"clean plate PNG", "background"))
         self.assertEqual(app.io.insert_results.call_args.kwargs["mask_pixels"], self.alpha)
         app.io.blend_removal_results.assert_called_once_with(b"clean plate PNG", self.alpha, [])
         self.assertEqual((app.settings.fibo_edit_mode, app.settings.fibo_context_mode), ("preserve", "full"))

@@ -5,6 +5,12 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-11-08
+
+- Local removal automatically reconstructs smooth backgrounds with continuous lighting instead of copying texture into large holes. Textured backgrounds continue to use PhotoCraft's content-aware fill.
+- Added a small, softly blended edge margin to clear object-selection fringes. Include cast shadows in the selection when they should disappear too.
+- Smooth backgrounds produce one deterministic repair. The original selection remains available, and Keep, Discard and appended choices use the prepared removal mask.
+
 ## [0.13.0] - 2026-11-08
 
 - Added a prompt-free Remove mode to the existing-ComfyUI panels. Nearby texture samples the surrounding image in PhotoCraft and works offline. Rebuild background uses FIBO Dev and its original encoder to retouch a clean plate inside the selection.

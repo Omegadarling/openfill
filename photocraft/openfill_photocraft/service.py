@@ -29,7 +29,7 @@ from .references import ReferenceImages
 
 NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection. Select > All works on the whole image."
 TEXTURE_REMOVAL = "photocraft-texture"
-TEXTURE_LABEL = "Nearby texture (PhotoCraft)"
+TEXTURE_LABEL = "Local removal (automatic)"
 REMOVE_SELECTION = "Select the object and its shadow, leaving some background outside the selection."
 
 
@@ -537,7 +537,7 @@ class Service:
                     image, variations, seed, progress, cancel
                 )
             )
-            runner.done("Filled from nearby texture.")
+            runner.done("Background repaired.")
             return layers
         if how.startswith("refine:") or how == "default":
             how = "active"

@@ -37,6 +37,7 @@ from openfill.backend import GenerationCancelled
 from openfill.geometry import Rect, flatten_over_mean, plan_native_removal
 
 from .control import ControlClient, ControlError
+from .local_removal import grow_support, removal_mask, smooth_background
 from .removal_blend import blend_reconstruction
 
 # How often a mask is tried before a job's result fails (see ``_add_mask``).
@@ -366,7 +367,7 @@ class PhotoCraftBridge:
         context = plan_native_removal(target, Rect(0, 0, *visible.size)).context
         box = (context.x, context.y, context.right, context.bottom)
         source = visible.crop(box)
-        alpha = selection.crop(box)
+        alpha = removal_mask(selection.crop(box))
         results = self._sample_texture(image, source, alpha, variations, seed, progress, cancelled)
         return self.insert_results(image, results, context, "Object Removal", 0, None, mask_pixels=alpha.tobytes())
 
@@ -375,6 +376,9 @@ class PhotoCraftBridge:
         source = Image.frombytes("RGBA", size, rgba)
         alpha = Image.frombytes("L", size, mask)
         return self._sample_texture(image, source, alpha, 1, seed, progress, cancelled)[0]
+
+    def prepare_removal_mask(self, size, pixels: bytes) -> bytes:
+        return removal_mask(Image.frombytes("L", size, pixels)).tobytes()
 
     def blend_removal_results(self, clean_plate: bytes, mask: bytes, proposals: list[bytes]) -> list[bytes]:
         with Image.open(_io.BytesIO(clean_plate)) as image:
@@ -386,7 +390,7 @@ class PhotoCraftBridge:
                 matched, fallback = blend_reconstruction(plate, proposal, selection)
             if fallback:
                 self.notify(
-                    f"Variation {index} uses Nearby texture because the AI reconstruction differed sharply from the sampled background."
+                    f"Variation {index} uses the local repair because the AI reconstruction differed sharply from the sampled background."
                 )
             buffer = _io.BytesIO()
             matched.save(buffer, format="PNG", compress_level=1)
@@ -396,11 +400,18 @@ class PhotoCraftBridge:
     def _sample_texture(self, image, source, alpha, variations, seed, progress, cancelled) -> list[bytes]:
         # Every selected pixel is excluded from the donor pool. Apply the artist's
         # soft edge only once, on the result layer in the original document.
-        support = alpha.point(lambda value: 255 if value else 0)
+        support = grow_support(alpha, 2)
         if not ImageChops.subtract(source.getchannel("A"), support).getbbox():
             raise BridgeError(
                 "No visible background surrounds this selection. To erase to transparency, clear the selection on the object's layer."
             )
+        smooth = smooth_background(source, alpha, progress, cancelled)
+        if smooth is not None:
+            smooth = Image.composite(smooth, source.convert("RGB"), alpha.point(lambda value: 255 if value else 0))
+            buffer = _io.BytesIO()
+            smooth.save(buffer, format="PNG", compress_level=1)
+            self.notify("The smooth background was reconstructed as one repair.")
+            return [buffer.getvalue()]
         guide = Image.new("RGBA", source.size, "white")
         guide.putalpha(support)
         first_seed = secrets.randbits(32) if seed < 0 else seed

@@ -138,7 +138,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     <div id="body-edit" class="section-body stack">
     <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="fill" class="on">Fill</button><button data-mode="remove">Remove</button><button data-mode="expand">Expand</button><button data-mode="txt2img">Create</button></div>
     <div class="context" id="context"><span id="ctx-icon"></span><span id="ctx-text">Connecting to PhotoCraft...</span></div>
-    <div class="small" id="remove-text" hidden>Select the whole object and its shadow, with a little background around them.</div>
+    <div class="small" id="remove-text" hidden>Select the object and its shadow. Remove includes a small edge margin to clear outlines.</div>
     <div class="stack" id="expand-box" hidden>
       <div class="seg s12 fit" id="presets" role="group" aria-label="Size"></div>
       <div class="grid4">
@@ -607,7 +607,7 @@ function context(){let[t,k,i]=baseContext();if(note){if(note.base!==t)note=null;
 const PROMPT_FREE=["lama-big","mat-places512"];
 function usable(){return models.filter(r=>r.visible!==false&&r.installed&&r.runnable&&!(r.missing_models||[]).length&&!(r.missing_nodes||[]).length)}
 function removalChoices(){const inst=usable(),rem=inst.filter(r=>(r.capabilities||[]).includes("remove")),ids=new Set(rem.map(r=>r.id));
-  const texture=["Nearby texture (PhotoCraft)",TEXTURE_REMOVAL];
+  const texture=["Local removal (automatic)",TEXTURE_REMOVAL];
   if(remoteFibo)return [texture,...rem.map(r=>[r.removal_label||r.name,r.id])];
   const painters=inst.filter(r=>(r.capabilities||[]).includes("fill")&&!ids.has(r.id)).sort((a,b)=>(a.id!==activeId)-(b.id!==activeId));
   const def=PROMPT_FREE.find(m=>ids.has(m)),out=[];
