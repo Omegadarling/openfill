@@ -18,6 +18,7 @@ This fork extends [Beckett Harriman’s OpenFill](https://github.com/beckettharr
 
 ## What this fork adds
 
+- **Remove without a prompt.** Select an object and its shadow, choose **Remove**, and press **Remove**. **Nearby texture (PhotoCraft)** fills from surrounding pixels even with ComfyUI offline. **Rebuild background (FIBO Dev)** reconstructs the scene on a compatible existing server.
 - **Image Edit** with full Qwen Image 2.1 BF16, four-step Qwen Image 2.1 Lightning v2 RL, and compatible FIBO 2.0 Edit Turbo and Dev NVFP4 checkpoints on an existing ComfyUI server.
 - **Multiple reference images** for Qwen 2.1 and FIBO 2.0. Add and reorder references, then use their labels in the prompt. Drag image files in from Explorer on Windows or drop them into the browser panel.
 - **Automatic feathering** softens the mask inward so an edit blends into the original along the selection edge.

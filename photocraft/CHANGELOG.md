@@ -5,6 +5,11 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-11-08
+
+- Added a prompt-free Remove mode to the existing-ComfyUI panels. Nearby texture samples the surrounding image in PhotoCraft and works offline. Rebuild background uses FIBO Dev and its original encoder to retouch a clean plate inside the selection.
+- Both methods use the captured selection for the result layer and support variation review, Keep, and Discard. The managed engine also offers Nearby texture alongside its removal models.
+
 ## [0.12.1] - 2026-11-04
 
 - Publish the first installable release of this PhotoCraft fork.

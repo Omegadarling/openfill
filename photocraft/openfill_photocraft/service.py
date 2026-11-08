@@ -28,6 +28,9 @@ from .control import ControlClient, ControlError
 from .references import ReferenceImages
 
 NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection. Select > All works on the whole image."
+TEXTURE_REMOVAL = "photocraft-texture"
+TEXTURE_LABEL = "Nearby texture (PhotoCraft)"
+REMOVE_SELECTION = "Select the object and its shadow, leaving some background outside the selection."
 
 
 @dataclass
@@ -48,6 +51,7 @@ class JobState:
     preview_seq: int = 0
     preview_rect: tuple[int, int, int, int] | None = None  # the region a preview frame shows (job's first canvas)
     cancel_requested: bool = False
+    local_removal: bool = False
     committing: bool = False  # the final PhotoCraft history operation cannot be cancelled halfway
     variations: list[str] = field(default_factory=list)  # names, best first
     shown: int = 0
@@ -305,12 +309,14 @@ class Service:
         return self.references.add_files(paths)
 
     def _start(self, kind: str, params: dict[str, Any]) -> None:
+        params = dict(params)
+        removing = kind == "fill" and bool(params.get("remove"))
         if self.app.settings.remote_fibo:
-            if kind != "fill" or params.get("remove"):
-                raise RuntimeError(
-                    "This integration supports prompted editing. Use Edit with a selection, or Select All."
-                )
-            if not str(params.get("prompt", "")).strip():
+            if kind != "fill":
+                raise RuntimeError("Choose Image Edit or Remove for this ComfyUI source.")
+            if removing and params.get("removal", "default") in ("", "default", None):
+                params["removal"] = TEXTURE_REMOVAL
+            if not removing and not str(params.get("prompt", "")).strip():
                 raise RuntimeError("Describe the desired edit or selected content.")
         if self.busy():
             raise RuntimeError("A job is already running.")
@@ -320,7 +326,12 @@ class Service:
         if use_references and (kind != "fill" or params.get("remove")):
             raise ValueError("Reference images are available for prompted edits.")
         # Freeze the image bytes and their order before the background worker starts.
-        params = dict(params, _reference_images=self.references.snapshot() if use_references else ())
+        params["_reference_images"] = self.references.snapshot() if use_references else ()
+        local_removal = removing and params.get("removal") == TEXTURE_REMOVAL
+        if removing and (local_removal or self.app.settings.remote_fibo):
+            params.pop("generation_settings", None)
+        if local_removal and not 1 <= int(params.get("variations", 1)) <= 5:
+            raise ValueError("Choose between one and five texture variations.")
         if "generation_settings" in params:
             values = validate_generation_settings(params.pop("generation_settings"))
             settings = self.app.settings
@@ -342,6 +353,7 @@ class Service:
                 "txt2img": "Text to Image",
             }.get(kind, kind)
             self.state.model = ""
+            self.state.local_removal = local_removal
             self.state.fraction, self.state.started, self.state.finished = 0.0, time.time(), 0.0
             self.state.cancel_requested = False
             self.state.committing = False
@@ -353,11 +365,14 @@ class Service:
     def cancel(self) -> None:
         with self.state.lock:
             committing = self.state.committing
+            local_removal = self.state.local_removal
             if not committing:
                 self.state.cancel_requested = True
         if committing:
             self._notice("The result is being added to PhotoCraft. Use Undo when it finishes to remove the edit.")
             return
+        if local_removal:
+            return  # The scratch fill checks cancellation before the result reaches the document.
         if self.app.settings.remote_fibo:
             backend = getattr(self.app, "_active_backend", None)
             if backend is not None:
@@ -376,7 +391,7 @@ class Service:
 
     def _job(self, kind: str, p: dict[str, Any]) -> None:
         image = None
-        if self._warm is not None and self._warm.is_alive():
+        if not self.state.local_removal and self._warm is not None and self._warm.is_alive():
             with self.state.lock:
                 self.state.text = "Starting the AI engine (the first time takes about a minute)..."
             self._warm.join()  # one start of ComfyUI, not two
@@ -398,7 +413,7 @@ class Service:
             if image is not None:
                 self.bridge.track(image)
                 base = self.bridge.history(image)
-            revision = self.bridge._revision(image) if previous else None
+            revision = self.bridge._revision(image) if previous or (kind == "fill" and p.get("remove")) else None
             if previous and (
                 not self._expected_history or base != self._expected_history or revision != self._expected_revision
             ):
@@ -454,11 +469,11 @@ class Service:
             done_text = self.state.text or "Done"
             if image is not None:
                 self._begin_commit()
+                if revision is not None and (
+                    self.bridge.history(image) != base or self.bridge._revision(image) != revision
+                ):
+                    raise RuntimeError("The document changed while generating. Review your selection before retrying.")
                 if previous:
-                    if self.bridge.history(image) != base or self.bridge._revision(image) != revision:
-                        raise RuntimeError(
-                            "The document changed while generating. The earlier choices are still available."
-                        )
                     for number, layer in enumerate(layers or (), start=len(previous) + 1):
                         label = re.sub(r" \(\d+\)$", "", layer.name)
                         layer.name = f"{label} ({number})"
@@ -491,7 +506,7 @@ class Service:
                 if cancelled:
                     self.state.message = "Cancelled - the image was left unchanged."
                 elif isinstance(err, NothingSelected):  # the core's message names GIMP's tools
-                    self.state.message = NO_SELECTION
+                    self.state.message = REMOVE_SELECTION if p.get("remove") else NO_SELECTION
                 else:
                     self.state.message = describe_error(err)
         finally:
@@ -513,11 +528,17 @@ class Service:
     OLD_REMOVALS = {"lama": "lama-big", "mat": "mat-places512"}
 
     def _remove(self, image: PCImage, p: dict[str, Any], seed: int, variations: int) -> list:
-        """Remove object with ``removal``: "default" (LaMa at the image's own resolution,
-        else MAT, else the active model with a background prompt) or any installed model's
-        id, used as picked (erasers with their own prompt, generation models with a
-        background-only prompt). One layer, one step."""
+        """Stage texture or model-based removal through the usual variation and commit path."""
         how = str(p.get("removal") or "default")
+        if how == TEXTURE_REMOVAL:
+            runner = WebRunner(self.app, "Object Removal", TEXTURE_LABEL)
+            layers = runner.run(
+                lambda progress, _preview, cancel: self.bridge.remove_with_texture(
+                    image, variations, seed, progress, cancel
+                )
+            )
+            runner.done("Filled from nearby texture.")
+            return layers
         if how.startswith("refine:") or how == "default":
             how = "active"
         how = self.OLD_REMOVALS.get(how, how)

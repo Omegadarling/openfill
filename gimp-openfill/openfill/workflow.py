@@ -1072,6 +1072,12 @@ def fibo_trained_size(source_width: int, source_height: int) -> tuple[int, int]:
 
 def fibo_edit_prompt(prompt: str, mode: str) -> str:
     """Add mode-specific guidance while retaining the user's complete edit."""
+    if mode == "background":
+        return (
+            "Regenerate the gray selected area in <image_1> with an empty, seamless continuation of the "
+            "adjacent background. Extend all background detail, lighting and texture from its edges, "
+            "maintaining the natural perspective and depth of the scene. Leave the background clear."
+        )
     if mode == "preserve":
         return (
             prompt.strip() + " Keep the existing structure, surfaces, frames, camera angle and perspective unchanged "
@@ -1086,7 +1092,7 @@ def fibo_edit_prompt(prompt: str, mode: str) -> str:
             "materials and texture, continuing surfaces and outlines at the boundary. Keep the unmasked "
             "surroundings unchanged. Replace the gray area completely; do not leave a gray patch."
         )
-    raise ValueError("FIBO edit mode must be 'preserve' or 'replace'")
+    raise ValueError("Unknown FIBO edit mode")
 
 
 def build_fibo2_edit(
@@ -1156,7 +1162,7 @@ def build_fibo2_edit(
         g.add("guide_mask", "ImageToMask", image=g.out("guide_mask_scale"), channel="red")
         guide_mask = g.out("guide_mask")
     reference = image
-    if req.fibo_edit_mode == "replace":
+    if req.fibo_edit_mode in ("replace", "background"):
         g.add("guide_gray", "EmptyImage", width=width, height=height, batch_size=1, color=0x808080)
         g.add(
             "selection_guide",
@@ -1185,7 +1191,7 @@ def build_fibo2_edit(
     denoise = 1.0
     if req.fibo_edit_mode == "preserve":
         # The native FIBO VAE and denoiser share Flux2's 128-channel /16 latent
-        # format. Start from pristine source pixels, never an annotated guide.
+        # format. Encode the intact source for the structure-preserving preset.
         g.add("original_latent", "VAEEncode", pixels=image, vae=g.out("vae"))
         sampler_latent = g.out("original_latent")
         if int(req.sampling.batch) > 1:

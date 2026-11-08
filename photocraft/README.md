@@ -22,6 +22,13 @@ The standard tools share the engine from [upstream OpenFill](https://github.com/
 
 If the connection succeeds and your model is missing, check that the server sees the required files and nodes and that the model is enabled in **Manage Models**. To return to the managed engine and its Fill, Remove, Expand, and Create modes, set `"remote_fibo": false` while the companion is closed.
 
+### Remove an object
+
+1. Lasso the whole object, its shadow or reflection, and a narrow margin of background. Leave some unselected background for OpenFill to sample.
+2. Choose **Remove** in the OpenFill panel. Start with **Nearby texture (PhotoCraft)** for surfaces such as water, grass, or a wall. It runs in PhotoCraft and works with ComfyUI offline.
+3. Press **Remove** and inspect the thumbnail. When the fill needs new detail, choose **Rebuild background (FIBO Dev)** and press **Remove** again to compare. PhotoCraft first fills the hole from nearby pixels. FIBO proposes detail for the selected area, and OpenFill matches its edge colors to the surrounding image. If a proposal differs sharply in color across much of the hole, OpenFill keeps the sampled fill and tells you which variation used it. The method appears when the server has the Dev checkpoint and its original encoder, and the Dev model is visible in **Manage Models**.
+4. Choose **Keep** under the result you want, or **Discard** to return to the original.
+
 ### Connect to ComfyUI on your LAN
 
 1. On the ComfyUI computer, start ComfyUI on `127.0.0.1:8188`. That computer needs a running SSH server that accepts your login and allows local port forwarding. Keep ComfyUI bound to loopback.
@@ -168,7 +175,7 @@ Select an area in PhotoCraft (Marquee, Lasso, Object Selection), then type what 
 |---|---|
 | Image Edit | Edits the selected region on an existing ComfyUI. Attach references with Qwen 2.1 or FIBO 2.0, or use a verified SDXL checkpoint for a prompt-based selection edit. |
 | Fill | Fills the selection from your prompt, or from the surroundings with no prompt. Up to 5 variations. |
-| Remove | Erases what you selected and continues the background. LaMa does it at the image's own resolution. The Model menu offers every installed model that can remove. |
+| Remove | Fills an object's selection from nearby texture or reconstructs the background with FIBO on an existing server. Managed mode also offers LaMa and its other installed removers. |
 | Expand | Grows the canvas: drag the frame's edges, or pick a ratio (Original adds 25 % on each side; 1:1, 5:4, 4:3, 3:2 and 16:9, landscape or portrait). It paints the new edges. |
 | Create | Text to Image as a new image (square, landscape or portrait), or as a layer in the open image. With a selection, the layer fills the selection. |
 
@@ -210,7 +217,7 @@ The managed engine also scans your own model files. Put compatible SD 1.5 inpain
 
 ## Known limits
 
-These are about resolution on large images. Remove is not affected: LaMa works at the image's own resolution.
+Nearby texture and managed LaMa work at the crop's native resolution. FIBO Dev reconstructs the crop at its trained resolution of about one megapixel, so large repairs can look softer than the surrounding image.
 
 - **Fill** with SD 1.5 or SDXL works at no less than 60 % (SD 1.5) or 75 % (SDXL) of full resolution, in overlapping windows when the selection is large. With **FLUX** or Qwen there are no windows yet: a large selection is drawn at about 1024 px on its long side and scaled up, so a 2000 px selection comes back at about half resolution.
 - **Expand** draws the new area in one pass at about 1024 px with every model and scales it up: on a 3000 px canvas the new edges are drawn at about a third of full resolution and look soft. Expand in rounds on big images.

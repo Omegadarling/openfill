@@ -28,7 +28,7 @@ from PIL import Image, ImageDraw
 from . import ui
 from .menu import Watcher
 from .modelinfo import choose_card_line, download_card_line, hardware_line, needed_by
-from .service import Service
+from .service import REMOVE_SELECTION, TEXTURE_LABEL, TEXTURE_REMOVAL, Service
 from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
 
 if TYPE_CHECKING:
@@ -92,7 +92,7 @@ def short_name(name: str) -> str:
 PROMPT_FREE = ("lama-big", "mat-places512")
 
 
-def removal_choices(facts: dict[str, Any]) -> dict[str, str]:
+def removal_choices(facts: dict[str, Any], *, existing_server: bool = False) -> dict[str, str]:
     """Remove object's model menu: label -> Service removal value, default first.
 
     With LaMa (or MAT) installed the default is LaMa at the image's own resolution
@@ -100,6 +100,8 @@ def removal_choices(facts: dict[str, Any]) -> dict[str, str]:
     the erasers, and each generation model (with a background-only prompt)."""
     models = facts.get("models") or {}
     removers = list(models.get("remove", []))
+    if existing_server:
+        return {TEXTURE_LABEL: TEXTURE_REMOVAL, **{name: model_id for model_id, name in removers}}
     ids = {model_id for model_id, _name in removers}
     painters = [(i, n) for i, n in models.get("fill", []) if i not in ids]
     active = facts.get("active") or ""
@@ -116,7 +118,8 @@ def removal_choices(facts: dict[str, Any]) -> dict[str, str]:
         while label in out:
             label += " "
         out[label] = model_id
-    return out or {"The active model": "default"}
+    texture = {TEXTURE_LABEL: TEXTURE_REMOVAL}
+    return {**out, **texture} if default else {**texture, **out}
 
 
 def fill_choices(facts: dict[str, Any]) -> dict[str, str]:
@@ -261,7 +264,8 @@ class Refresher:
         for row in rows:
             if row["installed"] and row["runnable"] and not row["missing_models"] and not row["missing_nodes"]:
                 for capability in row["capabilities"]:
-                    models.setdefault(capability, []).append((row["id"], row["name"]))
+                    label = row.get("removal_label") if capability == "remove" else None
+                    models.setdefault(capability, []).append((row["id"], label or row["name"]))
         active = app.active_model_id()
         facts.update(
             models=models,
@@ -452,7 +456,7 @@ class Bar:
         self.bottom_gap.pack(fill="x")
 
         m = self.main
-        tabs = (("fill", "Image Edit"),) if self.service.app.settings.remote_fibo else TABS
+        tabs = (("fill", "Image Edit"), ("remove", "Remove")) if self.service.app.settings.remote_fibo else TABS
         self.modes = ui.Seg(m, tabs, self.select_tab, CW, 13)
         self.tab_buttons = {key: _SegKey(self.modes, key) for key, _label in tabs}
         self.context_row = ui.frame(m)
@@ -460,7 +464,9 @@ class Bar:
         self.context_icon.pack(side="left", anchor="n", pady=(1, 0))
         self.context = ui.small(self.context_row, "", wrap=CW - 20)
         self.context.pack(side="left", padx=(6, 0), fill="x")
-        self.remove_line = ui.small(m, "Erases what you selected and fills in the background around it.")
+        self.remove_line = ui.small(
+            m, "Select the whole object and its shadow, with a little background around them.", wrap=CW
+        )
 
         from .expand_view import ExpandView
 
@@ -503,8 +509,9 @@ class Bar:
         )
         self.var_seg.pack(side="left")
         self.var_buttons = [_SegKey(self.var_seg, n) for n in range(1, 6)]
+        self.model_label = tk.StringVar(value="Model")
         self.model_box = ui.Select(
-            self._row(self.options, "Model", pady=(8, 0)),
+            self._row(self.options, "Model", pady=(8, 0), label_var=self.model_label),
             ui.FIELD_W,
             command=self._model_picked,
             manage=lambda: self.select_view("models"),
@@ -568,14 +575,17 @@ class Bar:
         self.pick_size("Square")
         self._update_target()
 
-    def _row(self, parent: tk.Misc, label: str, pady=(0, 0)) -> tk.Frame:
+    def _row(self, parent: tk.Misc, label: str, pady=(0, 0), *, label_var=None) -> tk.Frame:
         """A form row: an 84 px grey label, then the control (packed into the returned frame)."""
         row = ui.frame(parent)
         row.pack(fill="x", pady=pady)
         cell = ui.frame(row, width=LABEL_W, height=32)
         cell.pack_propagate(False)
         cell.pack(side="left")
-        ui.small(cell, label, wrap=0).pack(side="left")
+        caption = ui.small(cell, label, wrap=0)
+        if label_var is not None:
+            label_var.trace_add("write", lambda *_: caption.configure(text=label_var.get()))
+        caption.pack(side="left")
         holder = ui.frame(row)
         holder.pack(side="left", padx=(12, 0))
         return holder
@@ -968,12 +978,14 @@ class Bar:
             self._select_tab(key)
 
     def _select_tab(self, key: str) -> None:
-        if self.service.app.settings.remote_fibo:
+        if self.service.app.settings.remote_fibo and key not in ("fill", "remove"):
             key = "fill"
         self.model_box.close()
         if key != self.tab.get():
             self._note = None
+            self.model_choice.set("")
         self.tab.set(key)
+        self.model_label.set("Method" if key == "remove" else "Model")
         self.modes.set(key)
         if key in PLACEHOLDERS:
             self.prompt.set_placeholder(
@@ -991,9 +1003,7 @@ class Bar:
     def _layout_main(self) -> None:
         """Pack the tool view's parts for the current mode (12 px apart)."""
         key = self.tab.get()
-        parts: list[tk.Misc] = (
-            [self.context_row] if self.service.app.settings.remote_fibo else [self.modes, self.context_row]
-        )
+        parts: list[tk.Misc] = [self.modes, self.context_row]
         if key == "remove":
             parts.append(self.remove_line)
         if key == "expand":
@@ -1084,8 +1094,9 @@ class Bar:
             return
         model_id = self._model_ids.get(label)
         facts = self.refresher.get()
-        removers = {i for i, _n in (facts.get("models") or {}).get("remove", [])}
-        if model_id and model_id != facts.get("active") and model_id not in removers:
+        available = facts.get("models") or {}
+        edit_models = {i for i, _n in available.get(self.tab.get(), [])}
+        if model_id and model_id != facts.get("active") and model_id in edit_models:
 
             def activate() -> None:
                 self.service.app.set_active(model_id)
@@ -1096,18 +1107,21 @@ class Bar:
     def generate(self) -> None:
         if self.service.busy() or self.go.disabled:
             return
-        generation_options = self.settings_view.generation_options()
+        kind, prompt = self.tab.get(), self.prompt.get().strip()
+        independent_removal = kind == "remove" and (
+            self.service.app.settings.remote_fibo or self._model() == TEXTURE_REMOVAL
+        )
+        generation_options = {} if independent_removal else self.settings_view.generation_options()
         if generation_options is None:
             self.select_view("generation")
             return
-        kind, prompt = self.tab.get(), self.prompt.get().strip()
         body: dict[str, Any] = {"variations": self.variations.get(), "seed": -1, "model": self._model()}
         if generation_options:
             body["generation_settings"] = generation_options
         try:
             if kind in ("fill", "remove"):
                 if not (self.watcher.snapshot().get("selection")):
-                    self._say(NO_SELECTION, BAD)
+                    self._say(REMOVE_SELECTION if kind == "remove" else NO_SELECTION, BAD)
                     return
                 body.update(
                     prompt="" if kind == "remove" else prompt, remove=kind == "remove", strength=1.0, negative=""
@@ -1150,9 +1164,11 @@ class Bar:
         except Exception as err:  # noqa: BLE001
             self._say(str(err), BAD)
             return
-        self.settings_view.generation_submitted()
+        if not independent_removal:
+            self.settings_view.generation_submitted()
         self._say("")
-        self._remember(prompt)
+        if kind != "remove":
+            self._remember(prompt)
         self._save_prefs()
         self._update()
 
@@ -1259,8 +1275,7 @@ class Bar:
         }
         shown_facts = {**facts, "models": models}
         if tab == "remove":
-            has_any = bool(models.get("remove") or models.get("fill"))
-            choices = removal_choices(shown_facts) if has_any else {}
+            choices = removal_choices(shown_facts, existing_server=self.service.app.settings.remote_fibo)
             wanted = self.prefs.get("removal", "")
         else:
             choices = fill_choices(shown_facts) if tab == "fill" else {name: i for i, name in models.get(tab, [])}
@@ -1274,7 +1289,7 @@ class Bar:
         if current not in names:
             current = wanted if wanted in names else (names[0] if names else "")
             self.model_choice.set(current)
-        if not facts:
+        if not facts and tab != "remove":
             shown = "Checking..."
         elif not names:
             has_options = bool(
@@ -1326,7 +1341,7 @@ class Bar:
         if tab in ("fill", "remove"):
             if sel:
                 return f"{doc['name']} · selection {sel[2]} x {sel[3]} px", DIM, "selection"
-            return NO_SELECTION, DIM, "selection"
+            return (REMOVE_SELECTION if tab == "remove" else NO_SELECTION), DIM, "selection"
         if not self.expand_view.job_active:  # the canvas grows round by round while it runs
             self.expand_view.set_image(doc["name"], int(doc["width"]), int(doc["height"]))
         if self.expand_view.needs_thumbnail and not self._thumb_busy and not self.service.busy():
@@ -1362,6 +1377,8 @@ class Bar:
             self.root.after(250, self._tick)
 
     def _engine_status(self, facts: dict[str, Any]) -> str:
+        if self.tab.get() == "remove" and self._model() == TEXTURE_REMOVAL:
+            return "Ready"
         engine = self.service.engine
         if not facts:
             return "Checking..."
@@ -1415,7 +1432,9 @@ class Bar:
         key: tuple = ()
         setup = facts.get("setup") or {}
         pre = facts.get("preflight") or {}
-        if self.service.app.settings.remote_fibo and facts.get("error"):
+        if self.tab.get() == "remove" and self._model() == TEXTURE_REMOVAL:
+            pass  # Nearby texture runs inside PhotoCraft, including when ComfyUI is offline.
+        elif self.service.app.settings.remote_fibo and facts.get("error"):
             key = ("remote", "warn", WARN, f"{self.service.app.source_label()} is unavailable", str(facts["error"]), ())
         elif facts and not facts.get("comfy_ok", True) and setup and "error" not in setup:
             key = (

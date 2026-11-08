@@ -356,6 +356,41 @@ def png_bytes(color, size=(64, 48)) -> bytes:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_texture_removal_needs_background_and_keeps_source_untouched_on_failure(self):
+        source = Image.new("RGBA", (64, 48), "gray")
+        for mask, message in ((None, "Select the object"), (Image.new("L", source.size, 255), "background outside")):
+            with (
+                self.subTest(message=message),
+                mock.patch.object(self.bridge, "_snapshot", return_value=(source, mask)),
+                self.assertRaisesRegex(BridgeError, message),
+            ):
+                self.bridge.remove_with_texture(self.image, 1, 42, mock.Mock(), lambda: False)
+
+        cutout = Image.new("RGBA", source.size)
+        cutout.paste("red", (8, 6, 28, 16))
+        with (
+            mock.patch.object(self.bridge, "_snapshot", return_value=(cutout, cutout.getchannel("A"))),
+            self.assertRaisesRegex(BridgeError, "erase to transparency"),
+        ):
+            self.bridge.remove_with_texture(self.image, 1, 42, mock.Mock(), lambda: False)
+
+        real_command = self.pc.run
+
+        def fail_fill(command, **params):
+            if command == "edit.contentAwareFill":
+                self.assertNotEqual(self.pc.active, 0)
+                raise control.ControlError("fill failed in scratch document")
+            return real_command(command, **params)
+
+        with (
+            mock.patch.object(self.pc, "run", side_effect=fail_fill),
+            self.assertRaisesRegex(control.ControlError, "fill failed"),
+        ):
+            self.bridge.remove_with_texture(self.image, 1, 42, mock.Mock(), lambda: False)
+        self.assertEqual(self.target["history"], ["Open"])
+        self.assertEqual((len(self.pc.docs), self.pc.active), (1, 0))
+        self.assertEqual(list(self.exchange.iterdir()), [])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.exchange = Path(self.tmp.name) / "exchange"
@@ -1020,7 +1055,7 @@ class BarLogicTests(unittest.TestCase):
         self.assertNotIn("refine:realvisxl-v5", choices.values())  # no two-pass Remove any more
         only_painters = {"active": "", "models": {"fill": self.FACTS["models"]["fill"]}}
         self.assertNotIn("default", removal_choices(only_painters).values())
-        self.assertEqual(removal_choices({}), {"The active model": "default"})
+        self.assertEqual(removal_choices({}), {"Nearby texture (PhotoCraft)": "photocraft-texture"})
 
     def test_fill_menu_also_offers_the_removal_models(self):
         try:

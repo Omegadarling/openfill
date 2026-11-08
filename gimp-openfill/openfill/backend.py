@@ -165,9 +165,9 @@ class InpaintRequest:
     prefill_style: str = "blur"  # "blur": soften existing content (fill); "border": paint the area
     # from its surroundings first (expand, object removal)
     color_match: float = 1.0  # strength of the post color correction (0 = off)
-    # FIBO only: masked source-latent editing for structure, or replace selected
-    # content using FIBO's grey-region reference conditioning and empty latent.
-    fibo_edit_mode: str = "preserve"  # preserve | replace
+    # Background removal starts from a texture-filled clean plate. Preserve uses
+    # the source latent, and Replace uses a gray guide and a fresh latent.
+    fibo_edit_mode: str = "preserve"  # preserve | replace | background
     # Immutable normalized PNGs in attachment order; the target is separate.
     reference_images: tuple[bytes, ...] = ()
 

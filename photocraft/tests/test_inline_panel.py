@@ -169,6 +169,39 @@ class InlinePanelTests(unittest.TestCase):
         self.assertEqual(bar.model_box.values, [self.qwen_name])
         self.assertFalse(bar.go.disabled)
 
+    def test_remove_defaults_to_texture_offline_and_preserves_pending_edit_controls(self):
+        bar = self.bar
+        bar.prompt.set("An edit I am still writing")
+        bar.refresher.get.return_value = {"error": "ComfyUI is offline", "comfy_ok": False}
+        bar.tab_buttons["remove"].invoke()
+        self.assertEqual(bar.model_box.values, ["Nearby texture (PhotoCraft)"])
+        self.assertFalse(bar.go.disabled)
+        self.assertFalse(bar.prompt.winfo_manager())
+        self.assertEqual(bar.model_label.get(), "Method")
+        with patch.object(bar.settings_view, "generation_options", side_effect=AssertionError("editing controls read")):
+            bar.generate()
+        kind, request = self.service.start.call_args.args
+        self.assertEqual((kind, request["removal"], request["prompt"]), ("fill", "photocraft-texture", ""))
+        self.assertTrue(request["remove"])
+        self.assertNotIn("useReferences", request)
+        bar.tab_buttons["fill"].invoke()
+        self.assertEqual(bar.prompt.get(), "An edit I am still writing")
+        self.assertTrue(bar.go.disabled)
+
+    def test_remove_only_offers_visible_reconstruction_models_and_keeps_the_edit_model(self):
+        bar = self.bar
+        facts = bar.refresher.get.return_value
+        facts["models"]["remove"] = [("fibo", "FIBO Dev"), ("hidden", "Hidden FIBO")]
+        self.service.app.settings.hidden_models = ["hidden"]
+        bar.select_tab("remove")
+        self.assertEqual(bar.model_box.values, ["Nearby texture (PhotoCraft)", "FIBO Dev"])
+        bar._model_picked("FIBO Dev")
+        bar.generate()
+        self.assertEqual(self.service.start.call_args.args[1]["removal"], "fibo")
+        self.service.app.set_active.assert_not_called()
+        bar.select_tab("fill")
+        self.assertEqual(bar._model(), self.qwen)
+
     def test_attach_reorder_and_send_only_to_a_supported_model(self):
         bar = self.bar
         files = [self.profile / "first.png", self.profile / "second.png"]

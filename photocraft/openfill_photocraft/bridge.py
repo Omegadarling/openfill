@@ -23,18 +23,21 @@ import io as _io
 import itertools
 import os
 import re
+import secrets
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import Image, ImageFilter
+from PIL import Image, ImageChops, ImageFilter
 
 from openfill import png
-from openfill.geometry import Rect, flatten_over_mean
+from openfill.backend import GenerationCancelled
+from openfill.geometry import Rect, flatten_over_mean, plan_native_removal
 
 from .control import ControlClient, ControlError
+from .removal_blend import blend_reconstruction
 
 # How often a mask is tried before a job's result fails (see ``_add_mask``).
 MASK_ATTEMPTS = 4
@@ -349,6 +352,85 @@ class PhotoCraftBridge:
 
     def mask_png_from_bytes(self, rect: Rect, pixels: bytes) -> bytes:
         return png.encode(rect.width, rect.height, pixels, 1)
+
+    def remove_with_texture(self, image: PCImage, variations: int, seed: int, progress, cancelled) -> list[PCLayer]:
+        """Synthesize from surrounding pixels in scratch documents, then stage the masked results."""
+        visible, selection = self._snapshot(image)
+        bounds = selection.getbbox() if selection is not None else None
+        if bounds is None:
+            raise BridgeError("Select the object and its shadow before pressing Remove.")
+        if selection.getextrema()[0] > 0:
+            raise BridgeError("Leave some background outside the selection so OpenFill can sample it.")
+        left, top, right, bottom = bounds
+        target = Rect(left, top, right - left, bottom - top)
+        context = plan_native_removal(target, Rect(0, 0, *visible.size)).context
+        box = (context.x, context.y, context.right, context.bottom)
+        source = visible.crop(box)
+        alpha = selection.crop(box)
+        results = self._sample_texture(image, source, alpha, variations, seed, progress, cancelled)
+        return self.insert_results(image, results, context, "Object Removal", 0, None, mask_pixels=alpha.tobytes())
+
+    def removal_guide(self, image, size, rgba, mask, seed, progress, cancelled) -> bytes:
+        """Make a clean plate from the exact source crop and mask captured for this AI job."""
+        source = Image.frombytes("RGBA", size, rgba)
+        alpha = Image.frombytes("L", size, mask)
+        return self._sample_texture(image, source, alpha, 1, seed, progress, cancelled)[0]
+
+    def blend_removal_results(self, clean_plate: bytes, mask: bytes, proposals: list[bytes]) -> list[bytes]:
+        with Image.open(_io.BytesIO(clean_plate)) as image:
+            plate = image.convert("RGB")
+        selection = Image.frombytes("L", plate.size, mask)
+        results = []
+        for index, data in enumerate(proposals, 1):
+            with Image.open(_io.BytesIO(data)) as proposal:
+                matched, fallback = blend_reconstruction(plate, proposal, selection)
+            if fallback:
+                self.notify(
+                    f"Variation {index} uses Nearby texture because the AI reconstruction differed sharply from the sampled background."
+                )
+            buffer = _io.BytesIO()
+            matched.save(buffer, format="PNG", compress_level=1)
+            results.append(buffer.getvalue())
+        return results
+
+    def _sample_texture(self, image, source, alpha, variations, seed, progress, cancelled) -> list[bytes]:
+        # Every selected pixel is excluded from the donor pool. Apply the artist's
+        # soft edge only once, on the result layer in the original document.
+        support = alpha.point(lambda value: 255 if value else 0)
+        if not ImageChops.subtract(source.getchannel("A"), support).getbbox():
+            raise BridgeError(
+                "No visible background surrounds this selection. To erase to transparency, clear the selection on the object's layer."
+            )
+        guide = Image.new("RGBA", source.size, "white")
+        guide.putalpha(support)
+        first_seed = secrets.randbits(32) if seed < 0 else seed
+        results = []
+        mask_doc, mask_layer = self._open(guide, "removal mask")
+        try:
+            for index in range(variations):
+                if cancelled():
+                    raise GenerationCancelled("Object removal cancelled.")
+                progress(index / variations, f"Sampling nearby texture ({index + 1}/{variations})...")
+                scratch, layer = self._open(source, "removal source")
+                rel = self._file("removal result")
+                try:
+                    self.client.run("select.loadSelection", channel="transparency", layer=mask_layer, document=mask_doc)
+                    self.client.run(
+                        "edit.contentAwareFill",
+                        layer=layer,
+                        sampling="auto",
+                        output="current",
+                        seed=(first_seed + index) % (1 << 64),
+                    )
+                    self.client.call("app.save", path=rel)
+                    results.append((self.exchange / rel).read_bytes())
+                finally:
+                    self._forget(rel)
+                    self._close(scratch)
+        finally:
+            self._close(mask_doc)
+            self.activate(image)
+        return results
 
     # writing ------------------------------------------------------------------------
 

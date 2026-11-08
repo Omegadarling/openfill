@@ -138,7 +138,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     <div id="body-edit" class="section-body stack">
     <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="fill" class="on">Fill</button><button data-mode="remove">Remove</button><button data-mode="expand">Expand</button><button data-mode="txt2img">Create</button></div>
     <div class="context" id="context"><span id="ctx-icon"></span><span id="ctx-text">Connecting to PhotoCraft...</span></div>
-    <div class="small" id="remove-text" hidden>Erases what you selected and fills in the background around it.</div>
+    <div class="small" id="remove-text" hidden>Select the whole object and its shadow, with a little background around them.</div>
     <div class="stack" id="expand-box" hidden>
       <div class="seg s12 fit" id="presets" role="group" aria-label="Size"></div>
       <div class="grid4">
@@ -295,6 +295,7 @@ const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0
 const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
+const REMOVE_SELECTION="Select the object and its shadow, leaving some background outside the selection.";
 let mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, pc={}, comfy=true, variations=1, target="image", size=[1024,1024], removal="", variationSet=null, remoteFibo=false, backendSource="";
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
@@ -302,7 +303,9 @@ $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset
 $("vars").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("vars"),b);variations=+b.textContent}};
 $("sizes").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("sizes"),b);size=[+b.dataset.w,+b.dataset.h];$("size-px").textContent=`${size[0]} x ${size[1]} px`}};
 $("targets").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("targets"),b);target=b.dataset.target}};
-function setMode(m){if(remoteFibo)m="fill";mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
+const TEXTURE_REMOVAL = "photocraft-texture";
+function setMode(m){if(remoteFibo&&m!=="remove")m="fill";mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
+  const label=m==="remove"?"Method":"Model";$("model").closest(".row").querySelector("label").textContent=label;$("model").setAttribute("aria-label",label);
   $("remove-text").hidden=m!=="remove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove";
   $("advanced").hidden=remoteFibo||m!=="fill";$("prompt").placeholder=remoteFibo?"Qwen and FIBO: describe the change. SDXL: describe what should appear in the selection. Select All to edit the whole image.":PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets()}
 const sections = new Map([...document.querySelectorAll("[data-panel]")].map(el => [el.dataset.panel, el]));
@@ -532,7 +535,7 @@ $("model").onchange=async()=>{const v=$("model").value;
   if(v==="__manage"){delete $("model").dataset.key;fillSelect();openSection("models");return}
   drawReferences();
   if(mode==="remove"){removal=v;return}
-  if(v&&v!==activeId&&!removers().has(v)){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
+  if(v&&v!==activeId&&usable().some(r=>r.id===v&&(r.capabilities||[]).includes(mode))){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
 function seedOf(){const v=$("seed").value.trim();return v===""?-1:parseInt(v)}
 function say(t,kind){note=t?{text:t,kind:kind||"bad",base:baseContext()[0]}:null;context()}
 const generationDirty = new Set();
@@ -556,9 +559,10 @@ function generationValues() {
 }
 async function start(kind,body){
   try {
-    const generation_settings = generationValues();
-    const submitted = [...generationDirty].map(id => [id, $(id).value, $(id).checked]);
-    await post("/api/"+kind, {...body, generation_settings});
+    const independentRemoval = body.remove && (remoteFibo || body.removal === TEXTURE_REMOVAL);
+    const submitted = independentRemoval ? [] : [...generationDirty].map(id => [id, $(id).value, $(id).checked]);
+    if (!independentRemoval) body.generation_settings = generationValues();
+    await post("/api/"+kind, body);
     for (const [id, value, checked] of submitted) {
       if ($(id).value === value && $(id).checked === checked) generationDirty.delete(id);
     }
@@ -569,7 +573,7 @@ async function start(kind,body){
   }
 }
 $("go").onclick=()=>{if(busy||!$("model").value||$("model").value==="__manage")return;const prompt=$("prompt").value.trim(),model=$("model").value;
-  if(mode==="fill"||mode==="remove"){if(!sel){say(NO_SEL,"bad");return}
+  if(mode==="fill"||mode==="remove"){if(!sel){say(mode==="remove"?REMOVE_SELECTION:NO_SEL,"bad");return}
     const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:remoteFibo?undefined:(mode==="fill"?+$("strength").value:1),seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
     if(mode==="remove"){b.removal=model;b.model="active";if(["default",...PROMPT_FREE].includes(model))b.variations=1}else{b.model=model;b.useReferences=referenceLimit()>0&&referenceRows.length>0}
     start("fill",b)}
@@ -594,7 +598,7 @@ function expSize(){if(!doc){$("exp-size").textContent="";return}const m=["left",
 function baseContext(){if(!pc.connected)return["Waiting for PhotoCraft...","dim","info"];if(pc.waiting)return["PhotoCraft is not answering. If its window is minimized or covered, bring it into view.","warn","warn"];
   if(mode==="txt2img"&&doc&&sel&&target==="layer")return[`A layer in ${doc.name}, on the selection (${sel[2]} x ${sel[3]} px)`,"dim","selection"];
   if(mode==="txt2img")return["Makes a new image"+(doc?`, or a layer in ${doc.name}`:""),"dim","image"];if(!doc)return["Open an image in PhotoCraft.","dim","image"];
-  if(mode==="fill"||mode==="remove")return sel?[`${doc.name} · ${doc.width} x ${doc.height} · selection ${sel[2]} x ${sel[3]} px`,"dim","selection"]:[NO_SEL,"dim","selection"];
+  if(mode==="fill"||mode==="remove")return sel?[`${doc.name} · ${doc.width} x ${doc.height} · selection ${sel[2]} x ${sel[3]} px`,"dim","selection"]:[mode==="remove"?REMOVE_SELECTION:NO_SEL,"dim","selection"];
   return[`${doc.name} · ${doc.width} x ${doc.height} · pixels to add on each side`,"dim","image"]}
 function context(){let[t,k,i]=baseContext();if(note){if(note.base!==t)note=null;else{t=note.text;k=note.kind;i={bad:"error",ok:"check",warn:"warn"}[k]||"info"}}
   $("ctx-icon").innerHTML=svg(i,C[k],14);$("ctx-text").textContent=t;$("context").style.color=C[k]}
@@ -602,13 +606,14 @@ function context(){let[t,k,i]=baseContext();if(note){if(note.base!==t)note=null;
 // LaMa and MAT give the same result for the same input; the first one installed is Remove's default (full resolution).
 const PROMPT_FREE=["lama-big","mat-places512"];
 function usable(){return models.filter(r=>r.visible!==false&&r.installed&&r.runnable&&!(r.missing_models||[]).length&&!(r.missing_nodes||[]).length)}
-function removers(){return new Set(usable().filter(r=>(r.capabilities||[]).includes("remove")).map(r=>r.id))}
 function removalChoices(){const inst=usable(),rem=inst.filter(r=>(r.capabilities||[]).includes("remove")),ids=new Set(rem.map(r=>r.id));
+  const texture=["Nearby texture (PhotoCraft)",TEXTURE_REMOVAL];
+  if(remoteFibo)return [texture,...rem.map(r=>[r.removal_label||r.name,r.id])];
   const painters=inst.filter(r=>(r.capabilities||[]).includes("fill")&&!ids.has(r.id)).sort((a,b)=>(a.id!==activeId)-(b.id!==activeId));
   const def=PROMPT_FREE.find(m=>ids.has(m)),out=[];
   if(def)out.push([`${short(rem.find(r=>r.id===def).name)} (default)`,"default"]);
   rem.concat(painters).forEach(r=>{if(r.id!==def)out.push([short(r.name),r.id])});
-  return out}
+  return def?[...out,texture]:[texture,...out]}
 function fillSelect(){const s=$("model");let opts;
   if(mode==="remove")opts=removalChoices();
   else{const inst=usable();opts=inst.filter(r=>(r.capabilities||[]).includes(mode)).map(r=>[r.name,r.id]);
@@ -622,7 +627,8 @@ function fillSelect(){const s=$("model");let opts;
   s.value=want||"";$("go").disabled=busy||!opts.length;drawReferences()}
 
 function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.statusText||"").startsWith("Downloading"))||models.find(r=>r.statusText==="Waiting");
-  if(!s.comfyReady&&s.remoteFibo)html=`<div class="head">${svg("warn",C.warn)}<span class="t">${esc(s.backendName)} is unavailable</span></div><div class="small">${esc(s.comfyProblem||"Start ComfyUI on the selected computer, then press Check.")}</div>`;
+  if(mode==="remove"&&$("model").value===TEXTURE_REMOVAL)html="";
+  else if(!s.comfyReady&&s.remoteFibo)html=`<div class="head">${svg("warn",C.warn)}<span class="t">${esc(s.backendName)} is unavailable</span></div><div class="small">${esc(s.comfyProblem||"Start ComfyUI on the selected computer, then press Check.")}</div>`;
   else if(!s.comfyReady)html=`<div class="head">${svg("warn",C.warn)}<span class="t">AI engine not found</span></div><div class="small">OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it.</div><div style="display:flex;gap:8px"><button class="btn accent flex" id="setup-folder">Choose folder</button><button class="btn flex" id="setup-help">How to install</button></div>`;
   else if(dl){const pct=dl.statusText.startsWith("Downloading")?parseInt(dl.statusText.split(" ").pop()):0;html=`<div class="head">${svg("download",C.accent)}<span class="t">Downloading ${esc(short(dl.name))}</span><span class="r">${pct}%</span></div><div class="bar"><i style="width:${pct}%"></i></div><div class="small">You can keep working.</div>`}
   else if(models.length&&!models.some(r=>r.installed&&r.runnable&&(r.capabilities||[]).includes("fill")))html=`<div class="head">${svg("warn",C.warn)}<span class="t">No models installed</span></div><div class="small">Install at least one model to start. LaMa and DreamShaper 8 (2.2 GB) cover every tool.</div><div style="display:flex"><button class="btn accent flex" id="setup-models">Open model manager</button></div>`;
@@ -671,20 +677,21 @@ function showVariations(job) {
 }
 async function tick(){
   let s;try{s=await get("/api/state")}catch(e){$("status").textContent="OpenFill stopped";return}
-  if(s.remoteFibo&&!remoteFibo){remoteFibo=true;document.querySelectorAll("[data-mode]").forEach(b=>{b.hidden=b.dataset.mode!=="fill";if(!b.hidden)b.textContent="Image Edit"});
+  if(s.remoteFibo&&!remoteFibo){remoteFibo=true;document.querySelectorAll("[data-mode]").forEach(b=>{b.hidden=!["fill","remove"].includes(b.dataset.mode);if(b.dataset.mode==="fill")b.textContent="Image Edit"});
     $("token").closest(".stack").hidden=true;$("stop").hidden=true;$("save-engine").hidden=true;
     Array.from($("sec-engine").children).slice(0,5).forEach(e=>e.hidden=true);
     const remote=document.createElement("div");remote.className="stack";remote.innerHTML='<label class="field"><span class="label">Run edits on</span><select id="fibo-source" aria-label="ComfyUI source"></select></label><div class="small" id="source-detail"></div><div class="small">Start ComfyUI on the chosen computer. OpenFill connects to that source and lists its available Qwen, FIBO, and SDXL edit models.</div>';$("sec-engine").prepend(remote);
     const sources=await get("/api/sources");$("fibo-source").replaceChildren(...sources.sources.map(src=>{const option=document.createElement("option");option.value=src.id;option.textContent=src.name;return option}));
     $("fibo-source").onchange=async()=>{const source=$("fibo-source").value;$("fibo-source").disabled=true;settingsNote("Connecting to the selected source...","dim");try{const r=await post("/api/backend/source",{source});settingsNote(r.name+": "+r.detail,r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}finally{await loadModels();await tick()}};
     document.querySelectorAll("[data-legacy-generation]").forEach(e=>e.hidden=true);$("fibo-edit-settings").hidden=false;
-    const defaults=document.createElement("div");defaults.className="small";defaults.textContent="Qwen Image 2.1: describe the change and what to keep. Lightning v2 RL uses its own four-step schedule. FIBO: describe the change; Turbo 4 steps / CFG 1, Dev 30 steps / CFG 5. SDXL: describe the desired selected content; 25 steps / CFG 6, DPM++ 2M/Karras, 75% change strength. Pixels outside the selection are preserved.";$("sec-generation").prepend(defaults);setMode("fill")}
+    const defaults=document.createElement("div");defaults.className="small";defaults.textContent="Qwen Image 2.1: describe the change and what to keep. Lightning v2 RL uses its own four-step schedule. FIBO: describe the change; Turbo 4 steps / CFG 1, Dev 30 steps / CFG 5. SDXL: describe the desired selected content; 25 steps / CFG 6, DPM++ 2M/Karras, 75% change strength. Pixels outside the selection are preserved.";$("sec-generation").prepend(defaults);setMode(mode)}
   if(s.pick){if(lastPick<0)lastPick=s.pick.seq;else if(s.pick.seq!==lastPick){lastPick=s.pick.seq;
-    location.hash="#"+(s.pick.action==="panel"?"fill":s.pick.action);window.focus();if(s.pick.action!=="remove")$("prompt").focus();if(s.pick.action==="remove"&&!s.busy)$("go").click()}}
+    location.hash="#"+(s.pick.action==="panel"?"fill":s.pick.action);window.focus();if(s.pick.action!=="remove")$("prompt").focus();if(s.pick.action==="remove"&&!s.busy){setMode("remove");$("go").click()}}}
   if(remoteFibo){if(backendSource!==s.backendSource){models=[];fillSelect();}backendSource=s.backendSource;$("fibo-source").value=s.backendSource;$("fibo-source").disabled=s.busy;$("source-detail").textContent=s.backendName+" · "+s.backendUrl;}
   pc=s.photocraft||{};doc=pc.document||null;sel=pc.selection||null;comfy=s.comfyReady;
   if(s.activeModel!==activeId){activeId=s.activeModel||"";fillSelect()}
-  const st=!comfy?["Not set up","warn"]:["Ready","ok"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
+  const ready=comfy||(mode==="remove"&&$("model").value===TEXTURE_REMOVAL);
+  const st=ready?["Ready","ok"]:["Not set up","warn"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
   context();if(mode==="expand"){presets();expSize()}setupCard(s);
   const j=s.job, running=j.state==="running";busy=s.busy||running;
   $("cancel").disabled=!!j.committing;$("cancel").textContent=j.committing?"Adding result...":"Cancel";

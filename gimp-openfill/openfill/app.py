@@ -508,6 +508,9 @@ class App:
                     "missing_models": st.missing_models,
                     "partial": st.partial,
                     "capabilities": list(e.capabilities),
+                    "removal_label": "Rebuild background (FIBO Dev)"
+                    if e.template == "fibo2_edit" and "remove" in e.capabilities
+                    else "",
                     "template": e.template or "",
                     "max_references": max_references,
                     "reference_syntax": reference_syntax,
@@ -871,8 +874,9 @@ class App:
         # selection there is nothing to fill, and filling the whole image is never
         # what was meant.
         self._check_image(image)
-        if self.settings.remote_fibo and (remove or not prompt.strip()):
-            raise BackendError("Describe the desired edit or selected content. Select All to edit the whole image.")
+        rebuild_background = self.settings.remote_fibo and remove
+        if self.settings.remote_fibo and not remove and not prompt.strip():
+            raise BackendError("Describe the desired edit or choose Remove to erase an object.")
         reference_images = tuple(reference_images)
         if reference_images and (remove or not prompt.strip()):
             raise BackendError("Reference images require a prompted edit.")
@@ -880,7 +884,12 @@ class App:
         if selection is None:
             self.log.info("fill: refused, nothing selected")
             raise NothingSelected(NO_SELECTION_MESSAGE)
-        if (remove or not prompt.strip()) and not as_picked and self._is_default_choice(model_choice):
+        if (
+            not rebuild_background
+            and (remove or not prompt.strip())
+            and not as_picked
+            and self._is_default_choice(model_choice)
+        ):
             # Remove object, or an empty prompt, with the default model: LaMa (then MAT)
             # whenever one is installed; generation checkpoints (SDXL in 10 of 13 judged
             # cases) repaint the object they were asked to remove. A model picked by
@@ -902,6 +911,8 @@ class App:
             raise BackendError(str(err)) from err
         selection_edit = model.effective_template in workflow.SELECTION_EDIT_TEMPLATES
         fibo_edit = model.effective_template == "fibo2_edit"
+        if rebuild_background and (not fibo_edit or entry is None or "remove" not in entry.capabilities):
+            raise BackendError("Choose Nearby texture or Rebuild background (FIBO Dev) in Remove.")
         # Options saved while this job runs apply to the next edit. Freeze all
         # context/mode/blend values before exporting pixels or entering inference.
         fibo_mode = self.settings.fibo_edit_mode
@@ -913,6 +924,11 @@ class App:
             else 0.0
         )
         auto_feather = self.settings.auto_feather
+        if rebuild_background:
+            # Start reconstruction from a clean plate and expose only the captured mask.
+            # Keep the captured selection edge, including any artist-applied feather.
+            fibo_mode, fibo_context_mode, fibo_context_percent = "background", "local", 100.0
+            boundary_strength, auto_feather = 0.0, False
         auto_feather_percent = self.settings.auto_feather_percent
         if strength is None:
             strength = self.sampling(model, variations, seed).denoise
@@ -1018,7 +1034,9 @@ class App:
             )
         image_png, image_rgba = self.io.export_region(image, ctx)
         mask_png, mask_raw = self.io.export_selection_mask(image, ctx)
-        layer_mask = None
+        if rebuild_background and 0 not in mask_raw:
+            raise BackendError("Leave some background outside the selection so OpenFill can reconstruct it.")
+        layer_mask = mask_raw if rebuild_background else None
         if selection_edit and auto_feather and auto_feather_percent > 0:
             from .auto_feather import feather_selection
 
@@ -1083,6 +1101,16 @@ class App:
             self, title, model_display_name(entry.name) if entry else model.checkpoint, interactive=self.interactive
         )
         try:
+            if rebuild_background:
+                prepare = getattr(self.io, "removal_guide", None)
+                if prepare is None:
+                    raise BackendError("Open the PhotoCraft Remove panel to rebuild the background.")
+                clean_plate = runner.run(
+                    lambda progress, _preview, cancel: prepare(
+                        image, ctx.size, image_rgba, mask_raw, seed, progress, cancel
+                    )
+                )
+                request = replace(request, image_png=clean_plate)
             result = runner.run(
                 lambda progress, preview, cancel: self.backend(progress, cancel).inpaint(
                     request, progress, preview, cancel
@@ -1091,12 +1119,15 @@ class App:
             self.server.touch()
             self._after_generation(result)
             self._debug_dump("fill", request, result, ctx)
+            images = result.images
+            if rebuild_background:
+                images = self.io.blend_removal_results(clean_plate, mask_raw, images)
             layer_options = {"grow": layer_grow}
             if layer_mask is not None:
                 layer_options["mask_pixels"] = layer_mask
             layers = self.io.insert_results(
                 image,
-                result.images,
+                images,
                 ctx,
                 name,
                 0.0 if selection_edit else float(mp.feather_image),

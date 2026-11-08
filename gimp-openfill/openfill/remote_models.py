@@ -81,7 +81,7 @@ def _discover_fibo(client: ComfyClient, source_label: str = "Local ComfyUI") -> 
                 id=mid,
                 name=f"{name} · Original · {source_label}",
                 tier="edit",
-                capabilities=("fill", "edit"),
+                capabilities=("fill", "edit", "remove") if mid == DEV_ID else ("fill", "edit"),
                 arch="fibo2",
                 template="fibo2_edit",
                 page=page,
@@ -106,7 +106,7 @@ def _discover_fibo(client: ComfyClient, source_label: str = "Local ComfyUI") -> 
         raise BackendUnavailable(f"No FIBO 2.0 NVFP4 Dev or Edit Turbo model is visible on {source_label}.")
     if heretic:
         # Original entries stay first, preserving the default when no preference
-        # is saved. Each optional entry changes only its CLIP loader selection.
+        # is saved. Removal was verified with Dev and its original encoder.
         from dataclasses import replace
 
         entries.extend(
@@ -115,6 +115,7 @@ def _discover_fibo(client: ComfyClient, source_label: str = "Local ComfyUI") -> 
                     entry,
                     id=entry.id + "-heretic",
                     name=entry.name.replace(" · Original · ", " · Heretic · "),
+                    capabilities=("fill", "edit"),
                     files=tuple(
                         FileSpec("clip1", "", "text_encoders/" + heretic) if file.role == "clip1" else file
                         for file in entry.files
