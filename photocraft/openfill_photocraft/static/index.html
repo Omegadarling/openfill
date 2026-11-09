@@ -138,6 +138,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     <div id="body-edit" class="section-body stack">
     <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="fill" class="on">Fill</button><button data-mode="remove">Remove</button><button data-mode="expand">Expand</button><button data-mode="txt2img">Create</button></div>
     <div class="context" id="context"><span id="ctx-icon"></span><span id="ctx-text">Connecting to PhotoCraft...</span></div>
+    <div class="row" id="remove-scene-row" hidden><label for="remove-scene">Suggest for</label><div class="select"><select id="remove-scene"><option value="">Choose a situation…</option></select></div></div>
     <div class="small" id="remove-text" hidden>Select the object and its shadow. Remove includes a small edge margin to clear outlines.</div>
     <div class="stack" id="expand-box" hidden>
       <div class="seg s12 fit" id="presets" role="group" aria-label="Size"></div>
@@ -304,9 +305,29 @@ $("vars").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("vars")
 $("sizes").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("sizes"),b);size=[+b.dataset.w,+b.dataset.h];$("size-px").textContent=`${size[0]} x ${size[1]} px`}};
 $("targets").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("targets"),b);target=b.dataset.target}};
 const TEXTURE_REMOVAL = "photocraft-texture";
+const selectionHint = $("remove-text").textContent;
+let removalScenes = [], selectedScene = "";
+function showRemovalGuide(opts) {
+  const box = $("remove-scene"), key = JSON.stringify(removalScenes);
+  if (box.dataset.key !== key) {
+    box.replaceChildren(new Option("Choose a situation…",""), ...removalScenes.map(x => new Option(x.scene,x.scene)));
+    box.dataset.key = key;
+  }
+  let scene = removalScenes.find(r => r.scene === selectedScene);
+  if (scene && scene.method && (scene.method !== removal || !opts.some(o => o[1] === scene.method))) scene = null;
+  selectedScene = scene ? scene.scene : "";
+  box.value = selectedScene;
+  $("remove-text").textContent = scene ? scene.tip : selectionHint;
+}
+$("remove-scene").onchange = () => {
+  selectedScene = $("remove-scene").value;
+  const choice = removalScenes.find(r => r.scene === selectedScene);
+  if (choice && choice.method && removalChoices().some(o => o[1] === choice.method)) removal = choice.method;
+  fillSelect();
+};
 function setMode(m){if(remoteFibo&&m!=="remove")m="fill";mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
   const label=m==="remove"?"Method":"Model";$("model").closest(".row").querySelector("label").textContent=label;$("model").setAttribute("aria-label",label);
-  $("remove-text").hidden=m!=="remove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove";
+  $("remove-scene-row").hidden=m!=="remove";$("remove-text").hidden=m!=="remove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove";
   $("advanced").hidden=remoteFibo||m!=="fill";$("prompt").placeholder=remoteFibo?"Qwen and FIBO: describe the change. SDXL: describe what should appear in the selection. Select All to edit the whole image.":PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets()}
 const sections = new Map([...document.querySelectorAll("[data-panel]")].map(el => [el.dataset.panel, el]));
 let layout = {order: [...sections.keys()], collapsed: ["models", "engine", "generation"]};
@@ -534,7 +555,7 @@ $("strength").oninput=()=>$("str-v").textContent=(+$("strength").value).toFixed(
 $("model").onchange=async()=>{const v=$("model").value;
   if(v==="__manage"){delete $("model").dataset.key;fillSelect();openSection("models");return}
   drawReferences();
-  if(mode==="remove"){removal=v;return}
+  if(mode==="remove"){removal=v;selectedScene="";showRemovalGuide(removalChoices());return}
   if(v&&v!==activeId&&usable().some(r=>r.id===v&&(r.capabilities||[]).includes(mode))){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
 function seedOf(){const v=$("seed").value.trim();return v===""?-1:parseInt(v)}
 function say(t,kind){note=t?{text:t,kind:kind||"bad",base:baseContext()[0]}:null;context()}
@@ -575,7 +596,7 @@ async function start(kind,body){
 $("go").onclick=()=>{if(busy||!$("model").value||$("model").value==="__manage")return;const prompt=$("prompt").value.trim(),model=$("model").value;
   if(mode==="fill"||mode==="remove"){if(!sel){say(mode==="remove"?REMOVE_SELECTION:NO_SEL,"bad");return}
     const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:remoteFibo?undefined:(mode==="fill"?+$("strength").value:1),seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
-    if(mode==="remove"){b.removal=model;b.model="active";if(["default",...PROMPT_FREE].includes(model))b.variations=1}else{b.model=model;b.useReferences=referenceLimit()>0&&referenceRows.length>0}
+    if(mode==="remove"){b.removal=model;b.model="active";if(["default","remote-lama-rmbg",...PROMPT_FREE].includes(model))b.variations=1}else{b.model=model;b.useReferences=referenceLimit()>0&&referenceRows.length>0}
     start("fill",b)}
   else if(mode==="expand"){const m=["left","top","right","bottom"].map(k=>+$("e-"+k).value);if(!m.some(Boolean)){say("Enter the pixels to add on each side, or pick a ratio.","bad");return}
     start("expand",{prompt,negative:"",left:m[0],top:m[1],right:m[2],bottom:m[3],variations,seed:-1,model})}
@@ -615,10 +636,10 @@ function removalChoices(){const inst=usable(),rem=inst.filter(r=>(r.capabilities
   rem.concat(painters).forEach(r=>{if(r.id!==def)out.push([short(r.name),r.id])});
   return def?[...out,texture]:[texture,...out]}
 function fillSelect(){const s=$("model");let opts;
-  if(mode==="remove")opts=removalChoices();
+  if(mode==="remove"){opts=removalChoices();showRemovalGuide(opts)}
   else{const inst=usable();opts=inst.filter(r=>(r.capabilities||[]).includes(mode)).map(r=>[r.name,r.id]);
     // Fill also offers the removal models: with an empty prompt they remove (LaMa and MAT ignore a prompt, erasers use their own)
-    if(mode==="fill")inst.filter(r=>(r.capabilities||[]).includes("remove")&&!(r.capabilities||[]).includes("fill")).forEach(r=>opts.push([r.name,r.id]))}
+    if(mode==="fill"&&!remoteFibo)inst.filter(r=>(r.capabilities||[]).includes("remove")&&!(r.capabilities||[]).includes("fill")).forEach(r=>opts.push([r.name,r.id]))}
   const want=mode==="remove"?(opts.some(o=>o[1]===removal)?removal:(opts[0]||[])[1]):(opts.some(o=>o[1]===activeId)?activeId:(opts[0]||[])[1]);
   const key=JSON.stringify([opts,want]);if(s.dataset.key===key)return;s.dataset.key=key;
   s.innerHTML="";if(!opts.length){const o=document.createElement("option");o.value="";o.textContent=models.some(r=>r.installed&&r.runnable)?"No visible models":models.length||!comfy?"No models installed":"Checking...";s.appendChild(o)}
@@ -720,7 +741,7 @@ function detail(r){if(r.template==="sdxl_edit")return "SDXL masked editing · de
   if(!caps.length||r.runnable===false)what=r.neededBy||"Needed by other models";return[what,r.size].filter(Boolean).join(" · ")}
 function mnote(t,kind){const n=$("mnote");n.hidden=!t;n.textContent=t||"";n.className="note "+(kind||"bad")}
 async function act(fn){try{await fn();mnote("")}catch(e){mnote(e.message,"bad")}loadModels()}
-async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}if(remoteFibo&&m.source!==backendSource)return;models=m.rows||[];$("hw").textContent=m.hardware||m.error||"";
+async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}if(remoteFibo&&m.source!==backendSource)return;models=m.rows||[];removalScenes=m.removalScenes||[];$("hw").textContent=m.hardware||m.error||"";
   fillSelect();if(layout.collapsed.includes("models"))return;
   const inst=models.filter(r=>r.installed).sort((a,b)=>(!a.runnable)-(!b.runnable)||(!a.active)-(!b.active)||a.name.localeCompare(b.name));
   const avail=models.filter(r=>!r.installed&&r.runnable).sort((a,b)=>a.name.localeCompare(b.name));

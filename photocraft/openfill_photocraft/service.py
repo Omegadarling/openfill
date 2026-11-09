@@ -539,6 +539,9 @@ class Service:
             )
             runner.done("Background repaired.")
             return layers
+        if how == "remote-lama-rmbg" and variations > 1:
+            variations = 1
+            self._notice("LaMa produces one repair for this selection.")
         if how.startswith("refine:") or how == "default":
             how = "active"
         how = self.OLD_REMOVALS.get(how, how)

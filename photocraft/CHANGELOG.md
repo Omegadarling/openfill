@@ -5,6 +5,12 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-11-08
+
+- Added selectable Big-LaMa, RORem and Qwen Image 2.1 Lightning removal on compatible existing servers. Both panels offer scene-based suggestions and manual choice.
+- Repair layers carry the document's RGB profile, fixing a visible seam on Adobe RGB images. Neural removals apply the prepared selection edge once.
+- FIBO's input guide preserves the original source outside the prepared mask, including the texture sampler's extra donor margin.
+
 ## [0.14.0] - 2026-11-08
 
 - Local removal automatically reconstructs smooth backgrounds with continuous lighting instead of copying texture into large holes. Textured backgrounds continue to use PhotoCraft's content-aware fill.

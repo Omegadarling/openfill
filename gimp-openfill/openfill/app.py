@@ -508,9 +508,16 @@ class App:
                     "missing_models": st.missing_models,
                     "partial": st.partial,
                     "capabilities": list(e.capabilities),
-                    "removal_label": "Rebuild background (FIBO Dev)"
-                    if e.template == "fibo2_edit" and "remove" in e.capabilities
-                    else "",
+                    "removal_label": (
+                        {
+                            "fibo2_edit": "Rebuild background (FIBO Dev)",
+                            "lama_rmbg": "LaMa (Big-LaMa)",
+                            "sdxl_eraser": "RORem (SDXL removal)",
+                            QWEN21_EDIT_TEMPLATE: "Qwen Image 2.1 Lightning",
+                        }.get(e.template, "")
+                        if self.settings.remote_fibo and "remove" in e.capabilities
+                        else ""
+                    ),
                     "template": e.template or "",
                     "max_references": max_references,
                     "reference_syntax": reference_syntax,
@@ -523,6 +530,8 @@ class App:
 
     def set_active(self, model_id: str) -> cat.ModelEntry:
         entry = cat.by_id(self.catalog, model_id)
+        if self.settings.remote_fibo and "fill" not in entry.capabilities:
+            raise ModelMissing("Choose removal models in the Remove panel.")
         if not entry.runnable:
             raise ModelMissing(f"'{model_display_name(entry.name)}' cannot be the active model (companion file)")
         self.settings.active_model = model_id
@@ -558,7 +567,7 @@ class App:
         else the automatic default among the installed models ("" for none)."""
         if self.settings.remote_fibo:
             self.refresh_remote_models()
-            ids = [e.id for e in self.catalog]
+            ids = [e.id for e in self.catalog if "fill" in e.capabilities]
             if self.settings.active_model.startswith("remote-fibo2-") and self.settings.active_model.endswith(
                 "-heretic"
             ):
@@ -874,7 +883,7 @@ class App:
         # selection there is nothing to fill, and filling the whole image is never
         # what was meant.
         self._check_image(image)
-        rebuild_background = self.settings.remote_fibo and remove
+        remote_removal = self.settings.remote_fibo and remove
         if self.settings.remote_fibo and not remove and not prompt.strip():
             raise BackendError("Describe the desired edit or choose Remove to erase an object.")
         reference_images = tuple(reference_images)
@@ -885,7 +894,7 @@ class App:
             self.log.info("fill: refused, nothing selected")
             raise NothingSelected(NO_SELECTION_MESSAGE)
         if (
-            not rebuild_background
+            not remote_removal
             and (remove or not prompt.strip())
             and not as_picked
             and self._is_default_choice(model_choice)
@@ -911,8 +920,18 @@ class App:
             raise BackendError(str(err)) from err
         selection_edit = model.effective_template in workflow.SELECTION_EDIT_TEMPLATES
         fibo_edit = model.effective_template == "fibo2_edit"
-        if rebuild_background and (not fibo_edit or entry is None or "remove" not in entry.capabilities):
-            raise BackendError("Choose Local removal or Rebuild background (FIBO Dev) in Remove.")
+        rebuild_background = remote_removal and fibo_edit
+        qwen_removal = remote_removal and model.qwen21_lightning
+        if remote_removal and entry is not None and entry.id in self.settings.hidden_models:
+            raise BackendError("This removal model is hidden. Choose a visible method.")
+        if remote_removal and (
+            entry is None
+            or "remove" not in entry.capabilities
+            or model.effective_template not in ("fibo2_edit", "lama_rmbg", "sdxl_eraser", QWEN21_EDIT_TEMPLATE)
+        ):
+            raise BackendError("Choose an available removal model in Remove.")
+        if self.settings.remote_fibo and not remove and entry is not None and "fill" not in entry.capabilities:
+            raise BackendError("Use this model from Remove.")
         # Options saved while this job runs apply to the next edit. Freeze all
         # context/mode/blend values before exporting pixels or entering inference.
         fibo_mode = self.settings.fibo_edit_mode
@@ -924,6 +943,9 @@ class App:
             else 0.0
         )
         auto_feather = self.settings.auto_feather
+        if remote_removal:
+            auto_feather = False
+            boundary_strength = 0.0
         if rebuild_background:
             # Start reconstruction from a clean plate and expose only the captured mask.
             # Keep the captured selection edge, including any artist-applied feather.
@@ -937,7 +959,8 @@ class App:
         target = selection
         removal_intent = remove or not prompt.strip() or model.prompt_free or model.eraser
         refine = (
-            bool(self.settings.refine)
+            not remote_removal
+            and bool(self.settings.refine)
             and model.effective_template in workflow.REFINE_TEMPLATES
             and float(self.settings.refine_denoise) > 0
         )
@@ -949,12 +972,19 @@ class App:
             removal_intent,
             (fibo_context_percent / 100.0 if fibo_edit else geometry.fill_padding(removal_intent, model.prompt_free)),
             refine=refine,
-            layout=False if selection_edit else float(self.settings.tile_denoise) < 1.0,
+            layout=False if selection_edit or remote_removal else float(self.settings.tile_denoise) < 1.0,
             layout_min_scale=float(self.settings.layout_min_scale),
             # Erasers work at full image resolution, in tiles of their own working size.
-            min_scale=0.0 if selection_edit else (1.0 if model.eraser else None),
+            min_scale=0.0 if selection_edit or remote_removal else (1.0 if model.eraser else None),
         )
-        if model.native_lama:
+        if model.effective_template == "lama_rmbg":
+            plan = geometry.plan_native_removal(target, full)
+            width, height = plan.context.size
+            scale = min(1.0, 1536 / max(width, height))
+            plan = replace(
+                plan, work=geometry.WorkingSize(max(1, round(width * scale)), max(1, round(height * scale)), scale)
+            )
+        elif model.native_lama:
             # LaMa at the image's own pixels: OpenFill's node fits it to the graphics memory.
             plan = geometry.plan_native_removal(target, full)
         elif model.prompt_free and int(self.settings.removal_tile) > 0:
@@ -985,7 +1015,7 @@ class App:
         layer_grow = geometry.layer_mask_grow(mp, removal_intent)
         color_match = geometry.color_match_strength(target, ctx, full, removal_intent)
         prefill_style, prefill_mode = geometry.prefill_for(removal_intent, strength, model.arch)
-        if selection_edit:
+        if selection_edit or remote_removal:
             layer_grow, color_match = 0, 0.0
         if model.prompt_free:
             prompt, negative = "", ""
@@ -993,6 +1023,13 @@ class App:
             # Erase-trained: their own prompt (what the user typed is not used).
             prompt, negative = workflow.ERASER_PROMPTS.get(model.effective_template, ("", ""))
             strength = 1.0
+        elif qwen_removal:
+            prompt = (
+                "Edit the first photograph. The second photograph marks the unwanted foreground object with translucent red paint. "
+                "Remove the marked object completely from the first photograph, revealing the scene behind it. "
+                "Continue the existing background surfaces, shapes, edges and lighting across the gap. Return the clean photograph."
+            )
+            negative = ""
         elif removal_intent:
             # Empty prompt on a generation model: ask for background, not "anything".
             prompt = self.REMOVAL_PROMPT
@@ -1034,12 +1071,14 @@ class App:
             )
         image_png, image_rgba = self.io.export_region(image, ctx)
         mask_png, mask_raw = self.io.export_selection_mask(image, ctx)
-        if rebuild_background and 0 not in mask_raw:
+        if remote_removal and 0 not in mask_raw:
             raise BackendError("Leave some background outside the selection so OpenFill can reconstruct it.")
-        if rebuild_background:
+        if remote_removal:
             mask_raw = self.io.prepare_removal_mask(ctx.size, mask_raw)
             mask_png = png.encode(ctx.width, ctx.height, mask_raw, 1)
-        layer_mask = mask_raw if rebuild_background else None
+        layer_mask = mask_raw if remote_removal else None
+        if qwen_removal:
+            reference_images = (self.io.removal_locator(ctx.size, image_rgba, mask_raw),)
         if selection_edit and auto_feather and auto_feather_percent > 0:
             from .auto_feather import feather_selection
 
@@ -1082,8 +1121,8 @@ class App:
             model=model,
             sampling=sampling,
             mode="fill",
-            grow=mp.grow_work,
-            feather=mp.blur_work,
+            grow=0 if remote_removal else mp.grow_work,
+            feather=0 if remote_removal else mp.blur_work,
             prefill=self.settings.prefill,
             prefill_style=prefill_style,
             prefill_mode=prefill_mode,
@@ -1133,7 +1172,7 @@ class App:
                 images,
                 ctx,
                 name,
-                0.0 if selection_edit else float(mp.feather_image),
+                0.0 if selection_edit or remote_removal else float(mp.feather_image),
                 self.paths.temp,
                 **layer_options,
             )

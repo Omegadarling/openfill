@@ -2,6 +2,9 @@
 
 Read this before editing the companion. This branch starts at OpenFill `photocraft-v0.2.4`. PhotoCraft-specific UI and control code live in `photocraft/openfill_photocraft`. The shared engine is in `gimp-openfill/openfill`. Build the distribution with `tools/make_photocraft_zip.py`.
 
+- Compare removal models on the same frozen input, selection and seed. Local suits smooth lighting, LaMa suits thin obstructions and paving, and Qwen Lightning can reconstruct recognizable geometry. RORem is a separate erase-trained model. Keep removal-only entries out of Image Edit and resolve suggestions against visible, available methods.
+- Qwen removal receives the original photograph and a second copy highlighting the selected object in translucent red. Dedicated removers get the original source. FIBO uses a locally repaired guide. Preserve the RGB ICC profile from the editor export when constructing scratch layers. Untagged scratch layers shifted the color of a correct cable repair when copied into Adobe RGB.
+
 - Existing-server mode defaults to a user-started ComfyUI at `127.0.0.1:8188`. Stock mode retains its managed engine. Model discovery reads actual loader choices and preserves their exact spelling, case, and path separators.
 - For Qwen Image 2.1 editing, use `TextEncodeQwenImage21` and its source-aligned latent. Restore the original crop size before compositing. The Lightning checkpoint needs the exact published four sigmas plus the terminal zero.
 - The document remains in reference slot 1. Use consecutive slots for attachments and derive the prompt labels from the selected model. The native and browser panels share reference state. Capture references at submission so later panel changes cannot affect an active edit.

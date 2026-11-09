@@ -25,11 +25,31 @@ If the connection succeeds and your model is missing, check that the server sees
 ### Remove an object
 
 1. Lasso the whole object, its shadow or reflection, and a narrow margin of background. Leave some unselected background for OpenFill to sample.
-2. Choose **Remove** in the OpenFill panel. Start with **Local removal (automatic)**. It continues smooth background shading or uses PhotoCraft's content-aware fill for texture. It works with ComfyUI offline.
-3. Press **Remove** and inspect the thumbnail. When the fill needs new detail, choose **Rebuild background (FIBO Dev)** and press **Remove** again to compare. PhotoCraft first fills the hole from nearby pixels. FIBO proposes detail for the selected area, and OpenFill matches its edge colors to the surrounding image. If a proposal differs sharply in color across much of the hole, OpenFill keeps the sampled fill and tells you which variation used it. The method appears when the server has the Dev checkpoint and its original encoder, and the Dev model is visible in **Manage Models**.
+2. Open **Remove**. Choose a situation in **Suggest for** to select a recommended method, or choose **Method** directly. You can override the suggestion before running.
+3. Press **Remove** and inspect the layer at full size. Run another method on the same selection to append an alternative.
 4. Choose **Keep** under the result you want, or **Discard** to return to the original.
 
 Remove adds a small, softly blended margin around the selection to clear outlines. The original selection stays available. Include cast shadows in the selection when they should be removed too. Smooth backgrounds produce one deterministic repair.
+
+| Situation | Method to try | What the comparison showed |
+| --- | --- | --- |
+| Smooth studio backdrop | Local removal (automatic) | Continued the lighting behind a character and a bottle. Works offline. |
+| Wires, paving or small clutter | LaMa (Big-LaMa) | Removed a cable across a launch pad and continued paving joints. |
+| Reflective object on overlapping surfaces | RORem (SDXL removal) or LaMa | Both removed a spoon from a cup and saucer. |
+| Missing recognizable shape | Qwen Image 2.1 Lightning | Reconstructed a plausible wheel and a cat's eye. Other scenes retained the object or showed artifacts. |
+| Water and surface bubbles | Rebuild background (FIBO Dev) | Continued bubbles behind a diver. Inspect for invented details or a visible boundary. |
+| Covered lettering | Original artwork or retyping | All tested models changed or lost letters beneath an opaque label. |
+
+**Existing ComfyUI servers.** The chooser checks the selected server. For Big-LaMa, install [ComfyUI-RMBG](https://github.com/1038lab/ComfyUI-RMBG) there. Its LaMa Remover uses `models/RMBG/Lama/big-lama.pt` and can download the roughly 206 MB checkpoint on first use. LaMa gives one deterministic result. For [RORem](https://huggingface.co/LetsThink/RORem/tree/22d02de974c8dc92c717cd3431f8b0fe0eeecc3b), use these loader names. Subfolders are supported.
+
+| Downloaded file | ComfyUI model path |
+| --- | --- |
+| `unet/diffusion_pytorch_model.safetensors` | `models/diffusion_models/RORem-unet.safetensors` |
+| `text_encoder_2/model.safetensors` | `models/text_encoders/RORem-clip-g.safetensors` |
+| `vae/diffusion_pytorch_model.safetensors` | `models/vae/RORem-sdxl-vae.safetensors` |
+| Standard [CLIP-L](https://huggingface.co/comfyanonymous/flux_text_encoders/blob/main/clip_l.safetensors) | `models/text_encoders/clip_l.safetensors` |
+
+Qwen removal uses the four-step Lightning model described above with the original image and a second copy highlighting the selection. FIBO removal uses Dev with its original encoder and a locally repaired guide. If its reconstruction differs sharply from that guide, OpenFill returns the local repair and identifies the fallback in the job notice. **Manage Models** controls visibility. The managed engine retains its existing removal choices.
 
 ### Connect to ComfyUI on your LAN
 
@@ -219,7 +239,7 @@ The managed engine also scans your own model files. Put compatible SD 1.5 inpain
 
 ## Known limits
 
-Local texture synthesis and managed LaMa work at the crop's native resolution. Smooth-background completion estimates the lighting at a smaller working size and restores it to the crop dimensions. FIBO Dev reconstructs the crop at its trained resolution of about one megapixel, so large repairs can look softer than the surrounding image.
+Local texture synthesis and managed native LaMa work at the crop's own resolution. Existing-server Big-LaMa uses the crop at up to 1536 pixels on its longest side. Smooth-background completion estimates lighting at a smaller working size and restores it to the crop dimensions. FIBO Dev reconstructs at about one megapixel, so large repairs can look softer than their surroundings.
 
 - **Fill** with SD 1.5 or SDXL works at no less than 60 % (SD 1.5) or 75 % (SDXL) of full resolution, in overlapping windows when the selection is large. With **FLUX** or Qwen there are no windows yet: a large selection is drawn at about 1024 px on its long side and scaled up, so a 2000 px selection comes back at about half resolution.
 - **Expand** draws the new area in one pass at about 1024 px with every model and scales it up: on a 3000 px canvas the new edges are drawn at about a third of full resolution and look soft. Expand in rounds on big images.

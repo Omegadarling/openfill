@@ -202,6 +202,26 @@ class InlinePanelTests(unittest.TestCase):
         bar.select_tab("fill")
         self.assertEqual(bar._model(), self.qwen)
 
+    def test_scene_suggestion_then_manual_override_uses_the_chosen_model(self):
+        bar = self.bar
+        facts = bar.refresher.get.return_value
+        facts["models"]["remove"] = [
+            ("remote-lama-rmbg", "LaMa (Big-LaMa)"),
+            ("remote-qwen-image-2.1-lightning-v2-rl", "Qwen Image 2.1 Lightning"),
+        ]
+        bar.select_tab("remove")
+        bar._scene_picked("Wire or repeating pattern")
+        self.assertEqual(bar._model(), "remote-lama-rmbg")
+        self.assertIn("LaMa", bar.remove_line.cget("text"))
+        bar._model_picked("Qwen Image 2.1 Lightning")
+        self.assertEqual(bar.remove_scene, "")
+        bar.generate()
+        self.assertEqual(self.service.start.call_args.args[1]["removal"], "remote-qwen-image-2.1-lightning-v2-rl")
+        self.service.app.set_active.assert_not_called()
+        bar._scene_picked("Covered lettering")
+        self.assertIn("reference", bar.remove_line.cget("text"))
+        self.assertEqual(bar._model(), "remote-qwen-image-2.1-lightning-v2-rl")
+
     def test_attach_reorder_and_send_only_to_a_supported_model(self):
         bar = self.bar
         files = [self.profile / "first.png", self.profile / "second.png"]

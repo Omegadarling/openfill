@@ -28,6 +28,7 @@ from PIL import Image, ImageDraw
 from . import ui
 from .menu import Watcher
 from .modelinfo import choose_card_line, download_card_line, hardware_line, needed_by
+from .removal_advice import SCENE_PLACEHOLDER, SELECTION_HINT, removal_scenes
 from .service import REMOVE_SELECTION, TEXTURE_LABEL, TEXTURE_REMOVAL, Service
 from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
 
@@ -122,12 +123,12 @@ def removal_choices(facts: dict[str, Any], *, existing_server: bool = False) -> 
     return {**out, **texture} if default else {**texture, **out}
 
 
-def fill_choices(facts: dict[str, Any]) -> dict[str, str]:
+def fill_choices(facts: dict[str, Any], *, existing_server: bool = False) -> dict[str, str]:
     """Fill's model menu: every installed fill model, then the removal models (with an
     empty prompt they remove; LaMa and MAT ignore a prompt, erasers use their own)."""
     models = facts.get("models") or {}
     out = {name: model_id for model_id, name in models.get("fill", [])}
-    for model_id, name in models.get("remove", []):
+    for model_id, name in () if existing_server else models.get("remove", []):
         if model_id not in out.values():
             out.setdefault(name, model_id)
     return out
@@ -464,9 +465,14 @@ class Bar:
         self.context_icon.pack(side="left", anchor="n", pady=(1, 0))
         self.context = ui.small(self.context_row, "", wrap=CW - 20)
         self.context.pack(side="left", padx=(6, 0), fill="x")
-        self.remove_line = ui.small(
-            m, "Select the object and its shadow. Remove includes a small edge margin to clear outlines.", wrap=CW
+        self.remove_scene_row = ui.frame(m)
+        self.remove_scene_box = ui.Select(
+            self._row(self.remove_scene_row, "Suggest for"), ui.FIELD_W, command=self._scene_picked
         )
+        self.remove_scene_box.pack(side="left")
+        self.remove_scene = ""
+        self.scene_choices = {}
+        self.remove_line = ui.small(m, SELECTION_HINT, wrap=CW)
 
         from .expand_view import ExpandView
 
@@ -1005,7 +1011,7 @@ class Bar:
         key = self.tab.get()
         parts: list[tk.Misc] = [self.modes, self.context_row]
         if key == "remove":
-            parts.append(self.remove_line)
+            parts.extend((self.remove_scene_row, self.remove_line))
         if key == "expand":
             parts.append(self.expand_view)
         if key in ("fill", "expand", "txt2img"):
@@ -1084,9 +1090,20 @@ class Bar:
     def _model(self) -> str:
         return self._model_ids.get(self.model_choice.get(), "active")
 
+    def _scene_picked(self, label: str) -> None:
+        choice = self.scene_choices.get(label)
+        self.remove_scene = label if choice else ""
+        if choice and choice["method"]:
+            name = next((n for n, i in self._model_ids.items() if i == choice["method"]), None)
+            if name:
+                self.model_choice.set(name)
+                self.prefs["removal"] = name
+        self._fill_models()
+
     def _model_picked(self, label: str) -> None:
         """The Model select: the model picked becomes the active one (Remove keeps its own
         choice; a removal model picked in Fill is used for that run only)."""
+        self.remove_scene = ""
         self.model_choice.set(label)
         self._fill_models()
         if self.tab.get() == "remove":
@@ -1137,7 +1154,7 @@ class Bar:
                 if kind == "remove":
                     removal = self._model_ids.get(self.model_choice.get(), "default")
                     body.update(removal=removal)
-                    if removal in (*PROMPT_FREE, "default"):
+                    if removal in (*PROMPT_FREE, "default", "remote-lama-rmbg"):
                         body.update(variations=1)  # same input, same result: one is enough
                 self.service.start("fill", body)
             elif kind == "expand":
@@ -1278,7 +1295,11 @@ class Bar:
             choices = removal_choices(shown_facts, existing_server=self.service.app.settings.remote_fibo)
             wanted = self.prefs.get("removal", "")
         else:
-            choices = fill_choices(shown_facts) if tab == "fill" else {name: i for i, name in models.get(tab, [])}
+            choices = (
+                fill_choices(shown_facts, existing_server=self.service.app.settings.remote_fibo)
+                if tab == "fill"
+                else {name: i for i, name in models.get(tab, [])}
+            )
             wanted = facts.get("active_name") or ""
         self._model_ids = choices
         names = list(choices)
@@ -1300,6 +1321,19 @@ class Bar:
         else:
             shown = current
         self.model_box.set(shown)
+        if tab == "remove":
+            self.scene_choices = {
+                r["scene"]: r
+                for r in removal_scenes((i for i, _ in models.get("remove", [])), self.service.app.settings.remote_fibo)
+            }
+            values = [SCENE_PLACEHOLDER, *self.scene_choices]
+            if self.remove_scene_box.values != values:
+                self.remove_scene_box.set_values(values)
+            scene = self.scene_choices.get(self.remove_scene)
+            if scene and scene["method"] and scene["method"] != choices.get(current):
+                self.remove_scene, scene = "", None
+            self.remove_scene_box.set(self.remove_scene or SCENE_PLACEHOLDER)
+            self.remove_line.configure(text=scene["tip"] if scene else SELECTION_HINT)
         busy = self.service.busy()
         limit, syntax = self._reference_options(facts)
         self.references.refresh(limit, syntax, busy)

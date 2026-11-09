@@ -128,7 +128,9 @@ def _prepare_mask(g: Graph, mask_image: list, req: InpaintRequest, caps: Capabil
     if blur:
         g.add("mask_img", "MaskToImage", mask=mask)
         radius = max(1, min(31, blur // 2))
-        g.add("mask_blur", "ImageBlur", image=g.out("mask_img"), blur_radius=radius, sigma=max(1.0, blur / 3.0))
+        g.add(
+            "mask_blur", "ImageBlur", image=g.out("mask_img"), blur_radius=radius, sigma=max(1.0, min(10.0, blur / 3.0))
+        )
         g.add("mask_soft", "ImageToMask", image=g.out("mask_blur"), channel="red")
         mask = g.out("mask_soft")
     return mask
@@ -1427,7 +1429,34 @@ def _removal_refine(
     return dest
 
 
+def build_lama_rmbg(
+    req: InpaintRequest,
+    image_ref: str,
+    mask_ref: str,
+    seed: int,
+    caps: Capabilities,
+    filename_prefix: str = "openfill/remove",
+) -> dict:
+    """Run the server's Big-LaMa node with the prepared removal mask."""
+    g = Graph()
+    g.add("load_image", "LoadImage", image=image_ref)
+    g.add("load_mask", "LoadImage", image=mask_ref)
+    image, mask_image = g.out("load_image"), g.out("load_mask")
+    if req.needs_scaling:
+        image = _scale_image(g, "image_scale", image, req.work_width, req.work_height)
+        mask_image = _scale_image(g, "mask_scale", mask_image, req.work_width, req.work_height)
+    g.add("mask", "ImageToMask", image=mask_image, channel="red")
+    g.add("support", "ThresholdMask", mask=g.out("mask"), value=0.0)
+    g.add("remove", "AILab_LamaRemover", images=image, masks=g.out("support"), removal_strength=128, edge_smoothness=0)
+    result = g.out("remove")
+    if req.needs_scaling:
+        result = _scale_image(g, "restore", result, req.width, req.height)
+    g.add(OUTPUT_NODE, "SaveImage", images=result, filename_prefix=filename_prefix)
+    return g.to_dict()
+
+
 BUILDERS = {
+    "lama_rmbg": build_lama_rmbg,
     "sd15_inpaint": build_inpaint,
     "sdxl_fooocus": build_inpaint,
     "flux_fill": build_flux_fill,

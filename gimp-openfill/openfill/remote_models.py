@@ -22,6 +22,8 @@ DEV_HERETIC_ID = DEV_ID + "-heretic"
 HERETIC_ENCODER = "qwen3_vl_4b_nvfp4_full.safetensors"
 QWEN21_FULL_ID = "remote-qwen-image-2.1-bf16"
 QWEN21_LIGHTNING_ID = "remote-qwen-image-2.1-lightning-v2-rl"
+LAMA_ID = "remote-lama-rmbg"
+ROREM_ID = "remote-rorem-sdxl"
 QWEN21_ENCODER = "qwen3vl_8b_fp8_scaled.safetensors"
 QWEN21_VAE = "qwen_image_2.1_vae_bf16.safetensors"
 
@@ -168,7 +170,7 @@ def _discover_qwen21(client: ComfyClient, source_label: str) -> list[ModelEntry]
                     id=mid,
                     name=f"{label} · {source_label}",
                     tier="edit",
-                    capabilities=("fill", "edit"),
+                    capabilities=("fill", "edit", "remove") if mid == QWEN21_LIGHTNING_ID else ("fill", "edit"),
                     arch="qwen_image",
                     template=QWEN21_EDIT_TEMPLATE,
                     page=page,
@@ -192,6 +194,84 @@ def _discover_qwen21(client: ComfyClient, source_label: str) -> list[ModelEntry]
     return entries
 
 
+def _discover_lama(client: ComfyClient, source_label: str) -> list[ModelEntry]:
+    node = client.object_info("AILab_LamaRemover").get("AILab_LamaRemover", {})
+    required = node.get("input", {}).get("required", {})
+    fields = {"images": "IMAGE", "masks": "MASK", "removal_strength": "INT", "edge_smoothness": "INT"}
+    if set(required) != set(fields) or any(not required[k] or required[k][0] != t for k, t in fields.items()):
+        return []
+    if (node.get("output") or [None])[0] != "IMAGE":
+        return []
+    return [
+        ModelEntry(
+            id=LAMA_ID,
+            name=f"LaMa (Big-LaMa) · {source_label}",
+            tier="removal",
+            capabilities=("remove",),
+            arch="inpaint_model",
+            template="lama_rmbg",
+            page="https://github.com/advimman/lama",
+            license_name="Apache-2.0 (model)",
+            license_url="https://github.com/advimman/lama/blob/main/LICENSE",
+            gated=False,
+            source_type="existing-node",
+            uploader="ComfyUI-RMBG",
+            min_vram_gb=2,
+            requires_nodes=(),
+            requires_models=(),
+            files=(),
+            source="remote",
+            family="removal",
+        )
+    ]
+
+
+def _discover_rorem(client: ComfyClient, source_label: str) -> list[ModelEntry]:
+    def names(node, field):
+        return _options(client.object_info(node), node, field)
+
+    unet = _filename(names("UNETLoader", "unet_name"), "RORem-unet.safetensors")
+    if not unet:
+        return []
+    info = client.object_info("DualCLIPLoader")
+    if "sdxl" not in _options(info, "DualCLIPLoader", "type"):
+        return []
+    clip_l = _filename(_options(info, "DualCLIPLoader", "clip_name1"), "clip_l.safetensors")
+    clip_g = _filename(_options(info, "DualCLIPLoader", "clip_name2"), "RORem-clip-g.safetensors")
+    vae = _filename(names("VAELoader", "vae_name"), "RORem-sdxl-vae.safetensors")
+    if not (
+        clip_l and clip_g and vae and client.object_info("InpaintModelConditioning").get("InpaintModelConditioning")
+    ):
+        return []
+    return [
+        ModelEntry(
+            id=ROREM_ID,
+            name=f"RORem (SDXL) · {source_label}",
+            tier="removal",
+            capabilities=("remove",),
+            arch="sdxl",
+            template="sdxl_eraser",
+            page="https://huggingface.co/LetsThink/RORem",
+            license_name="Apache-2.0",
+            license_url="https://huggingface.co/LetsThink/RORem",
+            gated=False,
+            source_type="first-party",
+            uploader="RORem authors",
+            min_vram_gb=8,
+            requires_nodes=(),
+            requires_models=(),
+            source="remote",
+            family="removal",
+            files=(
+                FileSpec("unet", "", "diffusion_models/" + unet),
+                FileSpec("clip1", "", "text_encoders/" + clip_l),
+                FileSpec("clip2", "", "text_encoders/" + clip_g),
+                FileSpec("vae", "", "vae/" + vae),
+            ),
+        )
+    ]
+
+
 def discover(client: ComfyClient, source_label: str = "Local ComfyUI") -> list[ModelEntry]:
     """Discover each family independently so an unavailable family cannot hide others."""
 
@@ -203,7 +283,13 @@ def discover(client: ComfyClient, source_label: str = "Local ComfyUI") -> list[M
 
     entries = []
     problems = []
-    for family, lookup in (("FIBO", _discover_fibo), ("SDXL", discover_sdxl), ("Qwen Image 2.1", _discover_qwen21)):
+    for family, lookup in (
+        ("FIBO", _discover_fibo),
+        ("SDXL", discover_sdxl),
+        ("Qwen Image 2.1", _discover_qwen21),
+        ("LaMa", _discover_lama),
+        ("RORem", _discover_rorem),
+    ):
         try:
             entries.extend(lookup(client, source_label))
         except Exception as err:

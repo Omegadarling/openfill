@@ -128,7 +128,7 @@ class ModelSpec:
     @property
     def prompt_free(self) -> bool:
         """LaMa / MAT style models that ignore the prompt."""
-        return self.effective_template == "inpaint_model"
+        return self.effective_template in ("inpaint_model", "lama_rmbg")
 
     @property
     def eraser(self) -> bool:

@@ -15,7 +15,13 @@ from PIL import Image, ImageChops  # noqa: E402
 
 from openfill import workflow  # noqa: E402
 from openfill.app import App  # noqa: E402
-from openfill.backend import BackendError, GenerationResult, ModelSpec  # noqa: E402
+from openfill.backend import (  # noqa: E402
+    QWEN21_EDIT_TEMPLATE,
+    QWEN21_LIGHTNING_FILE,
+    BackendError,
+    GenerationResult,
+    ModelSpec,
+)
 from openfill.config import Settings  # noqa: E402
 from openfill.geometry import Rect  # noqa: E402
 
@@ -74,9 +80,31 @@ class BackgroundRemovalTests(unittest.TestCase):
         self.assertEqual(result.getpixel((37, 40)), plate.getpixel((37, 40)))
         self.assertLess(ImageChops.difference(result, plate).getpixel((38, 40))[0], 8)
 
+    def test_neural_removers_use_original_pixels_and_apply_the_prepared_edge_once(self):
+        self.app.io.removal_locator.return_value = b"selection highlighted in the original"
+        models = [
+            ModelSpec(arch="inpaint_model", template="lama_rmbg"),
+            ModelSpec(arch="sdxl", template="sdxl_eraser"),
+            ModelSpec(arch="qwen_image", template=QWEN21_EDIT_TEMPLATE, unet=QWEN21_LIGHTNING_FILE),
+        ]
+        for model in models:
+            with self.subTest(template=model.template):
+                self.app.resolve_model.return_value = (self.entry, model)
+                self.app.generative_fill(object(), "", "", 1, 1, 25, "chosen", remove=True, as_picked=True)
+                req = self.app.backend.return_value.inpaint.call_args.args[0]
+                self.assertEqual(req.image_png, b"original PNG")
+                self.assertEqual(
+                    req.reference_images, (b"selection highlighted in the original",) if model.qwen21_lightning else ()
+                )
+                self.assertEqual((req.grow, req.feather), (0, 0))
+                inserted = self.app.io.insert_results.call_args
+                self.assertEqual(inserted.args[4], 0.0)
+                self.assertEqual(inserted.kwargs["mask_pixels"], self.alpha)
+                self.app.io.removal_guide.assert_not_called()
+
     def test_ineligible_model_or_failed_clean_plate_never_submits_original_image(self):
         self.entry.capabilities = ("fill", "edit")
-        with self.assertRaisesRegex(BackendError, "FIBO Dev"):
+        with self.assertRaisesRegex(BackendError, "available removal model"):
             self.app.generative_fill(object(), "", "", 1, 1, 25, "turbo", remove=True)
         self.entry.capabilities += ("remove",)
         self.app.io.removal_guide.side_effect = RuntimeError("scratch fill failed")

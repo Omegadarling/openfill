@@ -83,12 +83,30 @@ class Api:
         }
 
     def models(self) -> dict[str, Any]:
+        from .removal_advice import removal_scenes
+
         app = self.service.app
         source_id = app.settings.fibo_source if app.settings.remote_fibo else ""
         try:
             rows = app.model_rows(app.server_model_files())
         except Exception as err:  # noqa: BLE001
-            return {"rows": [], "error": describe_error(err), "source": source_id}
+            return {
+                "rows": [],
+                "removalScenes": removal_scenes([], app.settings.remote_fibo),
+                "error": describe_error(err),
+                "source": source_id,
+            }
+        available = [
+            r["id"]
+            for r in rows
+            if r.get("visible", True)
+            and r["installed"]
+            and r["runnable"]
+            and "remove" in r["capabilities"]
+            and not r["missing_nodes"]
+            and not r["missing_models"]
+        ]
+        scenes = removal_scenes(available, app.settings.remote_fibo)
         status = app.task_status()
         current = status.get("current") or {}
         pending = [t.get("model_id") for t in app.server.pending_tasks()]
@@ -103,8 +121,10 @@ class Api:
 
             if source_id != app.settings.fibo_source:
                 rows, source_id = [], app.settings.fibo_source
+                scenes = removal_scenes([], True)
             return {
                 "rows": rows,
+                "removalScenes": scenes,
                 "current": current,
                 "pending": pending,
                 "source": source_id,
@@ -120,7 +140,7 @@ class Api:
                 cat.add_amd_notes(rows, app.catalog)  # what may not work on an AMD card
         except Exception:  # noqa: BLE001
             hw = None
-        return {"rows": rows, "current": current, "pending": pending, "hardware": hw}
+        return {"rows": rows, "removalScenes": scenes, "current": current, "pending": pending, "hardware": hw}
 
     def thumbnail(self, index: int) -> bytes:
         """A small JPEG of variation ``index`` of the last job (for the page's picker)."""

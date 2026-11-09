@@ -90,6 +90,7 @@ class PCImage:
     _snapshot: tuple[int, Image.Image, Image.Image | None] | None = None  # (revision, visible, selection)
     shift: tuple[int, int] = (0, 0)  # where the job's original (0, 0) is now (an expand grows the canvas)
     excluded_layers: tuple[int, ...] = ()  # existing choices omitted from an appended edit's input
+    rgb_profile: bytes | None = None  # RGB space of the exported source pixels
 
     def _inspect(self) -> dict:
         self.bridge.activate(self)
@@ -319,6 +320,8 @@ class PhotoCraftBridge:
                 self._close(index)
             self.activate(image)
         visible = self._read(visible_rel).convert("RGBA")
+        profile = visible.info.get("icc_profile") or b""
+        image.rgb_profile = profile if profile[16:20] == b"RGB " and profile[36:40] == b"acsp" else None
         selection = self._read(mask_rel).convert("L") if mask_doc is not None else None
         image._snapshot = (revision, visible, selection)
         return visible, selection
@@ -375,7 +378,25 @@ class PhotoCraftBridge:
         """Make a clean plate from the exact source crop and mask captured for this AI job."""
         source = Image.frombytes("RGBA", size, rgba)
         alpha = Image.frombytes("L", size, mask)
-        return self._sample_texture(image, source, alpha, 1, seed, progress, cancelled)[0]
+        data = self._sample_texture(image, source, alpha, 1, seed, progress, cancelled)[0]
+        # Texture synthesis also clears its narrow donor guard. The model should
+        # see the original scene everywhere outside the actual removal layer.
+        with Image.open(_io.BytesIO(data)) as repair:
+            guide = Image.composite(
+                repair.convert("RGB"), source.convert("RGB"), alpha.point(lambda v: 255 if v else 0)
+            )
+        buffer = _io.BytesIO()
+        guide.save(buffer, format="PNG", compress_level=1)
+        return buffer.getvalue()
+
+    def removal_locator(self, size, rgba: bytes, mask: bytes) -> bytes:
+        """Mark the selected object for an instruction editor while retaining its scene context."""
+        source = Image.frombytes("RGBA", size, rgba).convert("RGB")
+        tint = Image.frombytes("L", size, mask).point(lambda value: round(value * 0.6))
+        marked = Image.composite(Image.new("RGB", size, (255, 32, 64)), source, tint)
+        buffer = _io.BytesIO()
+        marked.save(buffer, format="PNG", compress_level=1)
+        return buffer.getvalue()
 
     def prepare_removal_mask(self, size, pixels: bytes) -> bytes:
         return removal_mask(Image.frombytes("L", size, pixels)).tobytes()
@@ -545,6 +566,11 @@ class PhotoCraftBridge:
                     Image.frombytes("RGBA", (layer.origin.width, layer.origin.height), layer.rgba),
                     (layer.origin.x, layer.origin.y),
                 )
+                # These pixels use the exported document's RGB coordinates. A
+                # differently tagged scratch document triggers a second color
+                # conversion in PhotoCraft's layer.copyToDocument.
+                if image.rgb_profile:
+                    full.info["icc_profile"] = image.rgb_profile
                 index, layer_id = self._open(full, "layer")
                 if scratch is None:
                     scratch = index
