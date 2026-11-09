@@ -38,6 +38,58 @@ def removal_mask(selection: Image.Image) -> Image.Image:
     return ImageChops.lighter(selection, ImageChops.multiply(soft, support))
 
 
+def texture_donors(source: Image.Image, support: Image.Image) -> Image.Image | None:
+    """For a narrow range of background colors, exclude unrelated objects from the sampling channel."""
+    size = source.size
+    sample = source.copy()
+    sample.thumbnail((448, 448), Image.Resampling.BOX)
+    hole = support.resize(sample.size, Image.Resampling.BOX).point(lambda value: 255 if value else 0)
+    known = ImageChops.subtract(sample.getchannel("A").point(lambda a: 255 if a == 255 else 0), hole)
+    radius = max(4, min(18, round(math.sqrt(hole.histogram()[255]) * 0.08)))
+    rim = ImageChops.darker(grow_support(hole, radius), known)
+    count = rim.histogram()[255]
+    if count < 64:
+        return None
+
+    # The rim follows the actual lasso. Its robust range tolerates isolated outlines
+    # and stars. A multicolored boundary needs the full context for continuing edges.
+    tables = []
+    for band in sample.convert("RGB").split():
+        histogram = band.histogram(mask=rim)
+        low = high = 0
+        total = 0
+        for value, frequency in enumerate(histogram):
+            if total < count * 0.05:
+                low = value
+            total += frequency
+            if total >= count * 0.95:
+                high = value
+                break
+        spread = high - low
+        if spread > 48:
+            return None
+        slack = max(12, round(spread * 0.75))
+        tables.append([255 if low - slack <= value <= high + slack else 0 for value in range(256)])
+
+    def matching(image):
+        red, green, blue = (band.point(table) for band, table in zip(image.convert("RGB").split(), tables, strict=True))
+        return ImageChops.darker(ImageChops.darker(red, green), blue)
+
+    neighbors = known.histogram()[255]
+    accepted = ImageChops.darker(matching(sample), known).histogram()[255]
+    if neighbors - accepted < max(24, neighbors * 0.005) or accepted < max(128, neighbors * 0.18):
+        return None
+    # Reject patch centers close to a disallowed color too. A center on the sky
+    # right next to a person can still copy the person's sleeve into the repair.
+    opaque = source.getchannel("A").point(lambda a: 255 if a == 255 else 0)
+    allowed = ImageChops.darker(matching(source), ImageChops.subtract(opaque, support))
+    guard = max(3, min(12, round(min(size) / 100)))
+    donors = ImageOps.invert(grow_support(ImageOps.invert(allowed), guard))
+    if donors.histogram()[255] < max(64, support.histogram()[255] * 0.12):
+        return None
+    return donors
+
+
 def smooth_background(
     source: Image.Image, selection: Image.Image, progress, cancelled, *, horizontal: float = 0.5
 ) -> Image.Image | None:

@@ -37,7 +37,7 @@ from openfill.backend import GenerationCancelled
 from openfill.geometry import Rect, flatten_over_mean, plan_native_removal
 
 from .control import ControlClient, ControlError
-from .local_removal import grow_support, removal_mask, smooth_background
+from .local_removal import grow_support, removal_mask, smooth_background, texture_donors
 from .removal_blend import blend_reconstruction
 from .removal_variations import distinct_repairs, render_views
 
@@ -450,26 +450,40 @@ class PhotoCraftBridge:
             smooth_results.append(buffer.getvalue())
         if smooth_results:
             return smooth_results
+        donors = texture_donors(source, support)
         guide = Image.new("RGBA", source.size, "white")
         guide.putalpha(support)
         first_seed = secrets.randbits(32) if seed < 0 else seed
         results = []
         mask_doc, mask_layer = self._open(guide, "removal mask")
+        donor_doc = None
+        progress_label = "Sampling nearby texture"
         try:
+            if donors is not None:
+                guide.putalpha(donors)
+                donor_doc, donor_layer = self._open(guide, "texture samples")
+                progress_label = "Sampling matching background texture"
             for index in range(variations):
                 if cancelled():
                     raise GenerationCancelled("Object removal cancelled.")
-                progress(index / variations, f"Sampling nearby texture ({index + 1}/{variations})...")
+                progress(index / variations, f"{progress_label} ({index + 1}/{variations})...")
                 scratch, layer = self._open(source, "removal source")
                 rel = self._file("removal result")
                 try:
+                    options = {"sampling": "auto"}
+                    if donor_doc is not None:
+                        self.client.run(
+                            "select.loadSelection", channel="transparency", layer=donor_layer, document=donor_doc
+                        )
+                        self.client.run("select.saveSelection", name="OpenFill texture samples", document=scratch)
+                        options = {"sampling": "custom", "channel": "OpenFill texture samples"}
                     self.client.run("select.loadSelection", channel="transparency", layer=mask_layer, document=mask_doc)
                     self.client.run(
                         "edit.contentAwareFill",
                         layer=layer,
-                        sampling="auto",
                         output="current",
                         seed=(first_seed + index) % (1 << 64),
+                        **options,
                     )
                     self.client.call("app.save", path=rel)
                     results.append((self.exchange / rel).read_bytes())
@@ -477,6 +491,8 @@ class PhotoCraftBridge:
                     self._forget(rel)
                     self._close(scratch)
         finally:
+            if donor_doc is not None:
+                self._close(donor_doc)
             self._close(mask_doc)
             self.activate(image)
         return results

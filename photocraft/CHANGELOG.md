@@ -5,6 +5,11 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] - 2026-11-09
+
+- Fixed Local removal copying distant people or objects into a selection on a subtly patterned background. When the colors just outside the lasso agree, PhotoCraft samples matching background patches. Gradients and boundaries spanning different colors retain their existing repair methods.
+- Automatic explains when Local can continue a subtle texture on the selected source.
+
 ## [0.16.1] - 2026-11-09
 
 - Remove now honors the 1–5 Variations setting in the native and browser panels, including automatic suggestions and manually selected LaMa or MAT. The original repair is first; extra orientations can continue the background differently.

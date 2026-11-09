@@ -11,12 +11,42 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageStat
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")]
 
-from openfill_photocraft.local_removal import grow_support, removal_mask, smooth_background  # noqa: E402
+from openfill_photocraft.local_removal import (  # noqa: E402
+    grow_support,
+    removal_mask,
+    smooth_background,
+    texture_donors,
+)
 
 from openfill.backend import GenerationCancelled  # noqa: E402
 
 
 class LocalRemovalTests(unittest.TestCase):
+    def test_sampling_excludes_unrelated_colors_patch_edges_and_transparency(self):
+        sky = (23, 70, 84, 255)
+        for color, intruder in ((sky, (240, 243, 244, 255)), ((209, 216, 204, 255), (37, 47, 59, 255))):
+            with self.subTest(color=color):
+                scene = Image.new("RGBA", (140, 110), color)
+                mask = Image.new("L", scene.size)
+                ImageDraw.Draw(mask).polygon([(35, 30), (96, 20), (89, 46), (50, 77)], fill=255)
+                draw = ImageDraw.Draw(scene)
+                draw.rectangle((103, 73, 128, 95), fill=intruder)
+                draw.rectangle((4, 80, 30, 97), fill=(*color[:3], 0))
+                scene.paste(intruder, mask=mask)
+                donors = texture_donors(scene, mask)
+                self.assertIsNotNone(donors)
+                for point in ((69, 39), (110, 78), (102, 73), (6, 81)):
+                    self.assertEqual(donors.getpixel(point), 0)
+                self.assertEqual(donors.getpixel((20, 22)), 255)
+
+    def test_multicolored_rim_keeps_both_sides_available(self):
+        scene = Image.new("RGBA", (130, 110), (20, 22, 25, 255))
+        ImageDraw.Draw(scene).rectangle((65, 0, 130, 110), fill=(225, 177, 145, 255))
+        mask = Image.new("L", scene.size)
+        ImageDraw.Draw(mask).ellipse((45, 20, 85, 80), fill=255)
+        self.assertIsNone(texture_donors(scene, mask))
+        self.assertIsNone(texture_donors(scene, Image.new("L", scene.size, 255)))
+
     def test_expansion_matches_a_maximum_filter_and_keeps_opposite_edges_empty(self):
         mask = Image.new("L", (37, 29))
         ImageDraw.Draw(mask).rectangle((0, 4, 9, 14), fill=255)

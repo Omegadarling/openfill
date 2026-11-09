@@ -18,6 +18,7 @@ def recommend(features, available, existing_server):
     qwen = (QWEN21_LIGHTNING_ID,)
     fibo = (DEV_ID,)
     f = features
+    local_tip = "Local is the available fallback. Check for repeated texture or broken edges in this selection."
     if f["samples"] < 7:
         ranking = (*lama, *rorem, *local)
         tip = "Little opaque background is visible around the selection. Leave some context and inspect the repair."
@@ -34,6 +35,7 @@ def recommend(features, available, existing_server):
         else:
             ranking = (*lama, *rorem, *local)
             tip = "There is faint texture beyond the selection. Check that the fill carries it across the repair."
+            local_tip = "Local can use the similar colors around the lasso to sample background texture. Check that the pattern continues across the repair."
     elif f["chroma"] < 0.10 and f["edge"] > 0.32 and f["range"] > 0.52:
         ranking = (*lama, *rorem, *local)
         tip = "There is fine, high-contrast detail here. If it is lettering, use a reference to restore the exact text."
@@ -52,7 +54,7 @@ def recommend(features, available, existing_server):
     ids = set(available) | {TEXTURE_REMOVAL}
     method = next(i for i in ranking if i in ids)
     if method == TEXTURE_REMOVAL and ranking != local:
-        tip = "Local is the available fallback. Check for repeated texture or broken edges in this selection."
+        tip = local_tip
     default = next((i for i in ("lama-big", "mat-places512") if i in ids), None)
     display = "default" if not existing_server and method == default else method
     return {"method": method, "displayMethod": display, "tip": tip}

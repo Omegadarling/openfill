@@ -30,7 +30,7 @@ If the connection succeeds and your model is missing, check that the server sees
 3. Choose **Variations** (1–5), press **Remove**, then click each result thumbnail to compare it on the canvas. You can also run another method on the same selection to add alternatives.
 4. Choose **Keep** under the result you want, or **Discard** to return to the original.
 
-Remove adds a small, softly blended margin around the selection to clear outlines. The original selection stays available. Include cast shadows in the selection when they should be removed too. Local tries different ways to continue the surrounding light or texture. If several attempts produce identical visible pixels, the panel shows one copy and tells you how many distinct repairs it found.
+Remove adds a small, softly blended margin around the selection to clear outlines. The original selection stays available. Include cast shadows in the selection when they should be removed too. Local tries different ways to continue the surrounding light or texture. On a patterned backdrop with similar colors around the lasso, Local limits its texture samples to matching background patches. This helps keep a nearby person or other object out of the repair. If several attempts produce identical visible pixels, the panel shows one copy and tells you how many distinct repairs it found.
 
 | Situation | Method to try | What the comparison showed |
 | --- | --- | --- |

@@ -1,5 +1,7 @@
 # OpenFill for PhotoCraft development notes
 
+When Local duplicates an unrelated object, inspect the donor pixels on the active source. An unrestricted content-aware fill copied a distant white rider into a dark patterned sky. Pass an alpha channel of eligible patch centers into PhotoCraft's custom sampling mode. Build the channel from a band around the actual lasso, give excluded pixels a patch margin, then reload the removal selection in the scratch document. Compare against the unmodified source and the failed render on the same selection.
+
 Check Remove variation counts at three points: what each panel submits, what the backend actually renders, and the composited pixels PhotoCraft displays while switching choices. A different seed cannot vary LaMa/MAT. Transform the source, mask and tile geometry together and undo the transform on the result. Preserve the normal first view. Flat lighting can give the same result in every direction; compare under the final mask and report the number of distinct choices.
 
 Automatic removal advice uses the read-only `document.sampleColor` command and the active selection bounds. A narrow sampling ring can mistake a defocused form for a flat wall. Checking how lighting changes farther out helped on a sticker over a clock and a tag on lunar terrain. Reserve the full mask export for the requested removal. Confirm the same stamped selection and source at submission.
