@@ -5,6 +5,11 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] - 2026-11-09
+
+- Remove now honors the 1–5 Variations setting in the native and browser panels, including automatic suggestions and manually selected LaMa or MAT. The original repair is first; extra orientations can continue the background differently.
+- Local can now offer different repairs on smooth lighting as well as texture. Identical visible repairs are shown once, with the requested and distinct counts.
+
 ## [0.16.0] - 2026-11-08
 
 - Remove now suggests an available model from the active selection and its surrounding composite pixels. Both panels show the reason and support manual override.
@@ -99,7 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - On Linux, a ComfyUI with PyTorch for ROCm works through **Choose folder**,
     and **How to install** opens the AMD steps when the card is AMD.
   - Models shows an AMD card's name and graphics memory
-    ("RX 7900 XT · 20 GB VRAM · ..."), and on an AMD card the GGUF models say
+    ("RX 7900 XT Â· 20 GB VRAM Â· ..."), and on an AMD card the GGUF models say
     that they have been reported to give only noise on some Radeon cards.
 - The README says where the model manager is: the gear icon, Models.
 

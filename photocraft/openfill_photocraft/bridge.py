@@ -39,6 +39,7 @@ from openfill.geometry import Rect, flatten_over_mean, plan_native_removal
 from .control import ControlClient, ControlError
 from .local_removal import grow_support, removal_mask, smooth_background
 from .removal_blend import blend_reconstruction
+from .removal_variations import distinct_repairs, render_views
 
 # How often a mask is tried before a job's result fails (see ``_add_mask``).
 MASK_ATTEMPTS = 4
@@ -372,6 +373,7 @@ class PhotoCraftBridge:
         source = visible.crop(box)
         alpha = removal_mask(selection.crop(box))
         results = self._sample_texture(image, source, alpha, variations, seed, progress, cancelled)
+        results = distinct_repairs(results, source, alpha)
         return self.insert_results(image, results, context, "Object Removal", 0, None, mask_pixels=alpha.tobytes())
 
     def removal_guide(self, image, size, rgba, mask, seed, progress, cancelled) -> bytes:
@@ -397,6 +399,14 @@ class PhotoCraftBridge:
         buffer = _io.BytesIO()
         marked.save(buffer, format="PNG", compress_level=1)
         return buffer.getvalue()
+
+    render_removal_views = staticmethod(render_views)
+
+    @staticmethod
+    def distinct_removal_images(images, size, rgba, mask):
+        return distinct_repairs(
+            images, Image.frombytes("RGBA", size, rgba), Image.frombytes("L", size, mask) if mask is not None else None
+        )
 
     def prepare_removal_mask(self, size, pixels: bytes) -> bytes:
         return removal_mask(Image.frombytes("L", size, pixels)).tobytes()
@@ -426,13 +436,20 @@ class PhotoCraftBridge:
             raise BridgeError(
                 "No visible background surrounds this selection. To erase to transparency, clear the selection on the object's layer."
             )
-        smooth = smooth_background(source, alpha, progress, cancelled)
-        if smooth is not None:
-            smooth = Image.composite(smooth, source.convert("RGB"), alpha.point(lambda value: 255 if value else 0))
+        smooth_results = []
+        for index, horizontal in enumerate((0.5, 0.85, 0.15, 0.70, 0.30)[:variations]):
+
+            def report(fraction, message, i=index):
+                progress((i + fraction) / variations, f"Repair {i + 1}/{variations}: {message}")
+
+            smooth = smooth_background(source, alpha, report, cancelled, horizontal=horizontal)
+            if smooth is None:
+                break  # This scene needs sampled texture.
             buffer = _io.BytesIO()
             smooth.save(buffer, format="PNG", compress_level=1)
-            self.notify("The smooth background was reconstructed as one repair.")
-            return [buffer.getvalue()]
+            smooth_results.append(buffer.getvalue())
+        if smooth_results:
+            return smooth_results
         guide = Image.new("RGBA", source.size, "white")
         guide.putalpha(support)
         first_seed = secrets.randbits(32) if seed < 0 else seed

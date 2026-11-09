@@ -1153,17 +1153,28 @@ class App:
                     )
                 )
                 request = replace(request, image_png=clean_plate)
-            result = runner.run(
-                lambda progress, preview, cancel: self.backend(progress, cancel).inpaint(
-                    request, progress, preview, cancel
-                )
+            render_views = (
+                getattr(self.io, "render_removal_views", None)
+                if remove and model.prompt_free and variations > 1
+                else None
             )
+
+            def inpaint(progress, preview, cancel):
+                render = self.backend(progress, cancel).inpaint
+                if render_views:
+                    return render_views(request, variations, render, progress, preview, cancel)
+                return render(request, progress, preview, cancel)
+
+            result = runner.run(inpaint)
             self.server.touch()
             self._after_generation(result)
             self._debug_dump("fill", request, result, ctx)
             images = result.images
             if rebuild_background:
                 images = self.io.blend_removal_results(clean_plate, mask_raw, images)
+            distinct = getattr(self.io, "distinct_removal_images", None) if remove and variations > 1 else None
+            if distinct:
+                images = distinct(images, ctx.size, image_rgba, layer_mask)
             layer_options = {"grow": layer_grow}
             if layer_mask is not None:
                 layer_options["mask_pixels"] = layer_mask
@@ -1185,7 +1196,7 @@ class App:
             self._correct_seams(image, layers, ctx, image_rgba, mask_raw, layer_grow)
         if self.settings.grain_match and not model.prompt_free and not selection_edit:
             self._match_grain(image, layers, ctx, image_rgba, mask_raw, result.seed)
-        if len(layers) > 1 and self.settings.rank_variations:
+        if len(layers) > 1 and self.settings.rank_variations and not render_views:
             layers = self._rank_variations(
                 image, layers, ctx, image_rgba, mask_raw, removal_intent, title, "" if removal_intent else prompt
             )

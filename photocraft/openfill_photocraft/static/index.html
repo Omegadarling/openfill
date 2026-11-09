@@ -640,7 +640,7 @@ $("go").onclick=()=>{if(busy||!$("model").value||$("model").value==="__manage")r
     if(mode==="remove"){if(selectedScene==="auto"&&autoWaiting())return;
       b.removal=selectedScene==="auto"?advice.method:model;b.model="active";
       if(selectedScene==="auto"){b.adviceKey=advice.key;b.adviceSource=advice.source}
-      if(["default","remote-lama-rmbg",...PROMPT_FREE].includes(b.removal))b.variations=1}else{b.model=model;b.useReferences=referenceLimit()>0&&referenceRows.length>0}
+    }else{b.model=model;b.useReferences=referenceLimit()>0&&referenceRows.length>0}
     start("fill",b)}
   else if(mode==="expand"){const m=["left","top","right","bottom"].map(k=>+$("e-"+k).value);if(!m.some(Boolean)){say("Enter the pixels to add on each side, or pick a ratio.","bad");return}
     start("expand",{prompt,negative:"",left:m[0],top:m[1],right:m[2],bottom:m[3],variations,seed:-1,model})}
@@ -772,7 +772,7 @@ async function tick(){
   if(j.state!=="idle"){$("jtitle").textContent=j.title||j.kind;$("jmodel").textContent=short(j.model||"");
     $("jbar").style.width=(j.fraction*100).toFixed(1)+"%";$("jbarbox").classList.toggle("done",j.state==="done");
     const t=$("jtext");if(j.state==="running"){t.className="run";t.textContent=`${j.text} · ${fmt(j.elapsed)}`}
-    else if(j.state==="done"){t.className="ok";t.textContent=`Done in ${fmt(j.elapsed)}.`}
+    else if(j.state==="done"){t.className="ok";t.textContent=j.removalSummary||`Done in ${fmt(j.elapsed)}.`}
     else{t.className=j.state==="cancelled"?"dimmed":"bad";t.textContent=j.message}
     if(j.state!=="running")$("preview").hidden=true;
     else if(j.previewSeq!==lastSeq){lastSeq=j.previewSeq;const r=await fetch("/api/preview?t="+j.previewSeq,{headers:H});if(r.status===200){$("preview").src=URL.createObjectURL(await r.blob());$("preview").hidden=false}else $("preview").hidden=true}}

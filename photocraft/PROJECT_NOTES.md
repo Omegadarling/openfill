@@ -1,5 +1,7 @@
 # OpenFill for PhotoCraft development notes
 
+Check Remove variation counts at three points: what each panel submits, what the backend actually renders, and the composited pixels PhotoCraft displays while switching choices. A different seed cannot vary LaMa/MAT. Transform the source, mask and tile geometry together and undo the transform on the result. Preserve the normal first view. Flat lighting can give the same result in every direction; compare under the final mask and report the number of distinct choices.
+
 Automatic removal advice uses the read-only `document.sampleColor` command and the active selection bounds. A narrow sampling ring can mistake a defocused form for a flat wall. Checking how lighting changes farther out helped on a sticker over a clock and a tag on lunar terrain. Reserve the full mask export for the requested removal. Confirm the same stamped selection and source at submission.
 
 Inspect crops against the actual mask. Big-LaMa replaced the middle of three coins with another coin. Local and RORem cleared it. A quiet border with distinct objects just beyond it can favor local repair.

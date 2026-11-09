@@ -27,10 +27,10 @@ If the connection succeeds and your model is missing, check that the server sees
 1. Lasso the whole object, its shadow or reflection, and a narrow margin of background. Leave some unselected background for OpenFill to sample.
 2. Open **Remove**. **Automatic from selection** reads the size of the selection and samples colors, edges and texture in the visible composite. The panel shows the suggested **Method** and a reason. Sampling happens locally. Redraw the selection to get a fresh suggestion.
    You can choose a **Method** yourself or pick a situation in **Suggest for**. Choose **Automatic from selection** to resume automatic suggestions.
-3. Press **Remove** and inspect the layer at full size. Run another method on the same selection to append an alternative.
+3. Choose **Variations** (1–5), press **Remove**, then click each result thumbnail to compare it on the canvas. You can also run another method on the same selection to add alternatives.
 4. Choose **Keep** under the result you want, or **Discard** to return to the original.
 
-Remove adds a small, softly blended margin around the selection to clear outlines. The original selection stays available. Include cast shadows in the selection when they should be removed too. Smooth backgrounds produce one deterministic repair.
+Remove adds a small, softly blended margin around the selection to clear outlines. The original selection stays available. Include cast shadows in the selection when they should be removed too. Local tries different ways to continue the surrounding light or texture. If several attempts produce identical visible pixels, the panel shows one copy and tells you how many distinct repairs it found.
 
 | Situation | Method to try | What the comparison showed |
 | --- | --- | --- |
@@ -43,7 +43,7 @@ Remove adds a small, softly blended margin around the selection to clear outline
 
 Automatic advice samples the rectangular extent of a lasso and the nearby background. The removal itself uses the full selection mask. The samples describe visible lighting and texture. For a recognizable hidden feature or lettering, the situation menu lets you supply that context.
 
-**Existing ComfyUI servers.** The chooser checks the selected server. For Big-LaMa, install [ComfyUI-RMBG](https://github.com/1038lab/ComfyUI-RMBG) there. Its LaMa Remover uses `models/RMBG/Lama/big-lama.pt` and can download the roughly 206 MB checkpoint on first use. LaMa gives one deterministic result. For [RORem](https://huggingface.co/LetsThink/RORem/tree/22d02de974c8dc92c717cd3431f8b0fe0eeecc3b), use these loader names. Subfolders are supported.
+**Existing ComfyUI servers.** The chooser checks the selected server. For Big-LaMa, install [ComfyUI-RMBG](https://github.com/1038lab/ComfyUI-RMBG) there. Its LaMa Remover uses `models/RMBG/Lama/big-lama.pt` and can download the roughly 206 MB checkpoint on first use. LaMa keeps the normal repair first. For additional choices, it processes the same image and mask from different orientations and aligns each result back to the canvas. For [RORem](https://huggingface.co/LetsThink/RORem/tree/22d02de974c8dc92c717cd3431f8b0fe0eeecc3b), use these loader names. Subfolders are supported.
 
 | Downloaded file | ComfyUI model path |
 | --- | --- |

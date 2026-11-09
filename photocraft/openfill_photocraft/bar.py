@@ -89,7 +89,7 @@ def short_name(name: str) -> str:
     return name.split(" (")[0].strip() or name
 
 
-# LaMa and MAT give the same result for the same input: one variation is enough.
+# Prefer a dedicated eraser when selecting the managed default.
 PROMPT_FREE = ("lama-big", "mat-places512")
 
 
@@ -1170,8 +1170,6 @@ class Bar:
                         removal = self._advice["method"]
                         body.update(adviceKey=self._advice["key"], adviceSource=self._advice["source"])
                     body.update(removal=removal)
-                    if removal in (*PROMPT_FREE, "default", "remote-lama-rmbg"):
-                        body.update(variations=1)  # same input, same result: one is enough
                 self.service.start("fill", body)
             elif kind == "expand":
                 left, top, right, bottom = self.expand_view.margins()
@@ -1631,7 +1629,7 @@ class Bar:
         if st["state"] == "running":
             text, color, font = f"{st['text']} · {clock}", DIM, self.small
         elif st["state"] == "done":
-            text, color, font = f"Done in {clock}.", OK, self.fonts.body
+            text, color, font = st.get("removalSummary") or f"Done in {clock}.", OK, self.fonts.body
         elif st["state"] == "cancelled":
             text, color, font = st["message"], DIM, self.fonts.body
         else:

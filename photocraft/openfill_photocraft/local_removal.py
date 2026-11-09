@@ -38,7 +38,9 @@ def removal_mask(selection: Image.Image) -> Image.Image:
     return ImageChops.lighter(selection, ImageChops.multiply(soft, support))
 
 
-def smooth_background(source: Image.Image, selection: Image.Image, progress, cancelled) -> Image.Image | None:
+def smooth_background(
+    source: Image.Image, selection: Image.Image, progress, cancelled, *, horizontal: float = 0.5
+) -> Image.Image | None:
     """Use harmonic interpolation when the surrounding image has very little texture."""
     rgb = source.convert("RGB")
     analysis = rgb.copy()
@@ -69,6 +71,7 @@ def smooth_background(source: Image.Image, selection: Image.Image, progress, can
     # Classification uses a wider guard. Interpolation follows the actual
     # boundary so the result meets the neighboring background without a seam.
     unknown = ImageChops.lighter(mask.point(lambda value: 255 if value else 0), ImageOps.invert(opaque))
+    across, down = 0.5 * horizontal, 0.5 * (1.0 - horizontal)
     current = None
     for longest in (16, 32, 64, 128, 256):
         size = (max(1, round(analysis.width * longest / 256)), max(1, round(analysis.height * longest / 256)))
@@ -112,7 +115,9 @@ def smooth_background(source: Image.Image, selection: Image.Image, progress, can
                 largest_change = 0.0
                 for parity in neighbors:
                     for index, left, right, top, bottom in parity:
-                        delta = (field[left] + field[right] + field[top] + field[bottom]) * 0.25 - field[index]
+                        delta = (
+                            (field[left] + field[right]) * across + (field[top] + field[bottom]) * down - field[index]
+                        )
                         field[index] += 1.6 * delta
                         largest_change = max(largest_change, abs(delta))
                 if iteration % 8 == 0 and cancelled():

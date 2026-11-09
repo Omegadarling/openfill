@@ -56,6 +56,7 @@ class JobState:
     committing: bool = False  # the final PhotoCraft history operation cannot be cancelled halfway
     variations: list[str] = field(default_factory=list)  # names, best first
     shown: int = 0
+    removal_summary: str = ""
     variation_set: int = 0
     notices: list[str] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -76,6 +77,7 @@ class JobState:
                 "variations": list(self.variations),
                 "shown": self.shown,
                 "variationSet": self.variation_set,
+                "removalSummary": self.removal_summary,
                 "notices": list(self.notices[-5:]),
                 "committing": self.committing,
             }
@@ -372,8 +374,8 @@ class Service:
         local_removal = removing and params.get("removal") == TEXTURE_REMOVAL
         if removing and (local_removal or self.app.settings.remote_fibo):
             params.pop("generation_settings", None)
-        if local_removal and not 1 <= int(params.get("variations", 1)) <= 5:
-            raise ValueError("Choose between one and five texture variations.")
+        if removing and not 1 <= int(params.get("variations", 1)) <= 5:
+            raise ValueError("Choose between one and five removal variations.")
         if "generation_settings" in params:
             values = validate_generation_settings(params.pop("generation_settings"))
             settings = self.app.settings
@@ -395,6 +397,7 @@ class Service:
                 "txt2img": "Text to Image",
             }.get(kind, kind)
             self.state.model = ""
+            self.state.removal_summary = ""
             self.state.local_removal = local_removal
             self.state.fraction, self.state.started, self.state.finished = 0.0, time.time(), 0.0
             self.state.cancel_requested = False
@@ -469,6 +472,12 @@ class Service:
             model = str(p.get("model") or "active")
             if kind == "fill" and p.get("remove"):
                 layers = self._remove(image, p, seed, variations)
+                if 0 < len(layers) < variations:
+                    label = "repair" if len(layers) == 1 else "repairs"
+                    with self.state.lock:
+                        self.state.removal_summary = (
+                            f"{variations} requested; {len(layers)} distinct {label} for this selection."
+                        )
             elif kind == "fill":
                 references = p.get("_reference_images", ())
                 layers = self.app.generative_fill(
@@ -585,9 +594,6 @@ class Service:
             )
             runner.done("Background repaired.")
             return layers
-        if how == "remote-lama-rmbg" and variations > 1:
-            variations = 1
-            self._notice("LaMa produces one repair for this selection.")
         if how.startswith("refine:") or how == "default":
             how = "active"
         how = self.OLD_REMOVALS.get(how, how)
