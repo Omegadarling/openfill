@@ -25,7 +25,8 @@ If the connection succeeds and your model is missing, check that the server sees
 ### Remove an object
 
 1. Lasso the whole object, its shadow or reflection, and a narrow margin of background. Leave some unselected background for OpenFill to sample.
-2. Open **Remove**. Choose a situation in **Suggest for** to select a recommended method, or choose **Method** directly. You can override the suggestion before running.
+2. Open **Remove**. **Automatic from selection** reads the size of the selection and samples colors, edges and texture in the visible composite. The panel shows the suggested **Method** and a reason. Sampling happens locally. Redraw the selection to get a fresh suggestion.
+   You can choose a **Method** yourself or pick a situation in **Suggest for**. Choose **Automatic from selection** to resume automatic suggestions.
 3. Press **Remove** and inspect the layer at full size. Run another method on the same selection to append an alternative.
 4. Choose **Keep** under the result you want, or **Discard** to return to the original.
 
@@ -33,12 +34,14 @@ Remove adds a small, softly blended margin around the selection to clear outline
 
 | Situation | Method to try | What the comparison showed |
 | --- | --- | --- |
-| Smooth studio backdrop | Local removal (automatic) | Continued the lighting behind a character and a bottle. Works offline. |
+| Smooth studio backdrop | Local background repair | Continued the lighting behind a character and a bottle. Works offline. |
 | Wires, paving or small clutter | LaMa (Big-LaMa) | Removed a cable across a launch pad and continued paving joints. |
 | Reflective object on overlapping surfaces | RORem (SDXL removal) or LaMa | Both removed a spoon from a cup and saucer. |
 | Missing recognizable shape | Qwen Image 2.1 Lightning | Reconstructed a plausible wheel and a cat's eye. Other scenes retained the object or showed artifacts. |
 | Water and surface bubbles | Rebuild background (FIBO Dev) | Continued bubbles behind a diver. Inspect for invented details or a visible boundary. |
 | Covered lettering | Original artwork or retyping | All tested models changed or lost letters beneath an opaque label. |
+
+Automatic advice samples the rectangular extent of a lasso and the nearby background. The removal itself uses the full selection mask. The samples describe visible lighting and texture. For a recognizable hidden feature or lettering, the situation menu lets you supply that context.
 
 **Existing ComfyUI servers.** The chooser checks the selected server. For Big-LaMa, install [ComfyUI-RMBG](https://github.com/1038lab/ComfyUI-RMBG) there. Its LaMa Remover uses `models/RMBG/Lama/big-lama.pt` and can download the roughly 206 MB checkpoint on first use. LaMa gives one deterministic result. For [RORem](https://huggingface.co/LetsThink/RORem/tree/22d02de974c8dc92c717cd3431f8b0fe0eeecc3b), use these loader names. Subfolders are supported.
 

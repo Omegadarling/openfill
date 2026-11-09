@@ -41,6 +41,14 @@ class InlinePanelTests(unittest.TestCase):
         service.app.source_label.return_value = "Local ComfyUI"
         service.engine = "ready"
         service.busy.return_value = False
+        service.removal_advice.return_value = {
+            "status": "ready",
+            "method": "photocraft-texture",
+            "displayMethod": "photocraft-texture",
+            "key": "test-key",
+            "source": "local",
+            "tip": "Gradual lighting.",
+        }
         service.state.snapshot.return_value = {"state": "idle", "variations": []}
         service.references = ReferenceImages()
         service.reference_rows.side_effect = service.references.rows
@@ -174,7 +182,7 @@ class InlinePanelTests(unittest.TestCase):
         bar.prompt.set("An edit I am still writing")
         bar.refresher.get.return_value = {"error": "ComfyUI is offline", "comfy_ok": False}
         bar.tab_buttons["remove"].invoke()
-        self.assertEqual(bar.model_box.values, ["Local removal (automatic)"])
+        self.assertEqual(bar.model_box.values, ["Local background repair"])
         self.assertFalse(bar.go.disabled)
         self.assertFalse(bar.prompt.winfo_manager())
         self.assertEqual(bar.model_label.get(), "Method")
@@ -194,7 +202,7 @@ class InlinePanelTests(unittest.TestCase):
         facts["models"]["remove"] = [("fibo", "FIBO Dev"), ("hidden", "Hidden FIBO")]
         self.service.app.settings.hidden_models = ["hidden"]
         bar.select_tab("remove")
-        self.assertEqual(bar.model_box.values, ["Local removal (automatic)", "FIBO Dev"])
+        self.assertEqual(bar.model_box.values, ["Local background repair", "FIBO Dev"])
         bar._model_picked("FIBO Dev")
         bar.generate()
         self.assertEqual(self.service.start.call_args.args[1]["removal"], "fibo")
@@ -221,6 +229,36 @@ class InlinePanelTests(unittest.TestCase):
         bar._scene_picked("Covered lettering")
         self.assertIn("reference", bar.remove_line.cget("text"))
         self.assertEqual(bar._model(), "remote-qwen-image-2.1-lightning-v2-rl")
+
+    def test_auto_advice_updates_method_and_keeps_a_manual_override(self):
+        from openfill_photocraft.removal_advice import AUTO
+
+        bar = self.bar
+        self.service.removal_advice.return_value = {"status": "sampling", "tip": "Reading colors…"}
+        facts = bar.refresher.get.return_value
+        facts["models"]["remove"] = [("remote-lama-rmbg", "Big-LaMa")]
+        bar.select_tab("remove")
+        self.assertTrue(bar.go.disabled)
+        self.assertEqual(bar.remove_scene_box.get(), AUTO)
+        self.service.removal_advice.return_value = {
+            "status": "ready",
+            "method": "remote-lama-rmbg",
+            "displayMethod": "remote-lama-rmbg",
+            "source": "local",
+            "key": "correct-selection",
+            "tip": "Nearby texture.",
+        }
+        bar._fill_models()
+        self.assertEqual(bar._model(), "remote-lama-rmbg")
+        bar.generate()
+        self.assertEqual(self.service.start.call_args.args[1]["adviceKey"], "correct-selection")
+        bar._model_picked("Local background repair")
+        bar._fill_models()
+        self.assertEqual(bar._model(), "photocraft-texture")
+        bar.generate()
+        self.assertNotIn("adviceKey", self.service.start.call_args.args[1])
+        bar._scene_picked(AUTO)
+        self.assertEqual(bar._model(), "remote-lama-rmbg")
 
     def test_attach_reorder_and_send_only_to_a_supported_model(self):
         bar = self.bar
@@ -381,6 +419,14 @@ class InlinePanelTests(unittest.TestCase):
 
         service.layers += [layer] * 5
         service.busy.return_value = False
+        service.removal_advice.return_value = {
+            "status": "ready",
+            "method": "photocraft-texture",
+            "displayMethod": "photocraft-texture",
+            "key": "test-key",
+            "source": "local",
+            "tip": "Gradual lighting.",
+        }
         st.update(state="done", fraction=1.0, variations=["First", *map(str, range(2, 7))])
         bar._update()
         self.assertEqual(len(bar.thumb_cells), 6)

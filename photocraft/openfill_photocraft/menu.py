@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import struct
 import threading
 import time
@@ -25,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .control import ControlClient, ControlError
+from .selection_advice import selection_key
 
 # (action, menu label). The label is also the name of the history step the entry leaves.
 # One entry: everything else is in the OpenFill bar it opens.
@@ -162,7 +164,7 @@ def install(client: ControlClient) -> list[str]:
 # Watching -----------------------------------------------------------------------------
 
 LABEL_ACTION = {label: action for action, label in ENTRIES}
-SCRATCH_PREFIX = "OpenFill "  # the names of the documents the bridge opens for a moment
+SCRATCH_NAME = re.compile(r"OpenFill (?:export|mask|(?:layer|mask|removal mask|removal source) \d+-\d+\.png)")
 
 
 @dataclass
@@ -181,6 +183,8 @@ class DocInfo:
     documents: int = 0
     updated: float = 0.0
     waiting: bool = False  # PhotoCraft has stopped answering (window hidden on Wayland)
+    revision: int = 0
+    active_layer: int | None = None
 
     def snapshot(self) -> dict[str, Any]:
         if not self.connected:
@@ -192,6 +196,9 @@ class DocInfo:
             "waiting": self.waiting,
             "document": {"name": self.name, "width": self.width, "height": self.height, "mode": self.mode},
             "selection": self.selection,
+            "selectionKey": selection_key(
+                self.index, self.name, self.revision, self.width, self.height, self.selection, self.active_layer
+            ),
         }
 
 
@@ -228,20 +235,33 @@ class Watcher:
 
     def poll(self) -> str | None:
         """One look at PhotoCraft; the action picked from the menu since the last look, if any."""
-        session = self.client.call("ui.inspect").get("session") or {}
+        ui = self.client.call("ui.inspect")
+        session = ui.get("session") or {}
         docs = session.get("documents") or []
         active = next((d for d in docs if d.get("index") == session.get("active")), None)
         if active is None:
             with self.lock:
                 self.info = DocInfo(connected=True, documents=len(docs), updated=time.time(), waiting=self.info.waiting)
             return None
-        if str(active.get("name") or "").startswith(SCRATCH_PREFIX):
+        if SCRATCH_NAME.fullmatch(str(active.get("name") or "")):
             return None  # OpenFill's own short-lived document: keep showing the user's
         key = (int(active["index"]), str(active.get("name")))
         revision = int(active.get("revision") or 0)
-        if self._seen.get(key) == revision and self.info.name == key[1]:
+        doc = ui.get("document") or {}
+        if (
+            self.info.connected
+            and self._seen.get(key) == revision
+            and (self.info.index, self.info.name) == key
+            and (
+                not doc
+                or (
+                    doc.get("activeLayer") == self.info.active_layer
+                    and (doc.get("selectionBounds") if doc.get("hasSelection") else None) == self.info.selection
+                )
+            )
+        ):
             return None
-        d = self.client.run("document.inspect") or {}
+        d = ui.get("document") or self.client.run("document.inspect") or {}
         history = list(d.get("history") or [])
         picked = None
         if history and history[-1] in LABEL_ACTION:
@@ -269,6 +289,8 @@ class Watcher:
                 documents=len(docs),
                 updated=time.time(),
                 waiting=self.info.waiting,
+                revision=int(d.get("revision", revision)),
+                active_layer=d.get("activeLayer"),
             )
         self._seen[key] = int(d.get("revision") or revision) if picked else revision
         if picked:

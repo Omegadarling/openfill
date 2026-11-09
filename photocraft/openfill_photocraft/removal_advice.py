@@ -3,10 +3,59 @@
 
 from openfill.remote_models import DEV_ID, LAMA_ID, QWEN21_LIGHTNING_ID, ROREM_ID
 
-from .service import TEXTURE_REMOVAL
+TEXTURE_REMOVAL = "photocraft-texture"
 
-SCENE_PLACEHOLDER = "Choose a situation…"
+AUTO = "Automatic from selection"
+SCENE_PLACEHOLDER = "Manual method"
 SELECTION_HINT = "Include the object and any shadow you want removed. A small edge margin clears outlines."
+
+
+def recommend(features, available, existing_server):
+    """Rank tested repair methods using visible cues. Never infer the identity of hidden content."""
+    local = (TEXTURE_REMOVAL,)
+    lama = (LAMA_ID, "lama-big", "mat-places512")
+    rorem = (ROREM_ID, "rorem-sdxl")
+    qwen = (QWEN21_LIGHTNING_ID,)
+    fibo = (DEV_ID,)
+    f = features
+    if f["samples"] < 7:
+        ranking = (*lama, *rorem, *local)
+        tip = "Little opaque background is visible around the selection. Leave some context and inspect the repair."
+    elif f["coverage"] < 0.10 and f["detail"] < 0.04 and f["range"] < 0.15 and f["jump"] < 0.09 and f["bend"] > 0.17:
+        ranking = local
+        tip = "A quiet rim surrounds this small selection, with stronger features farther out. Local can fill from the rim."
+    elif f["detail"] <= 0.02 and f["edge"] <= 0.035 and f["jump"] < 0.16:
+        if f["bend"] < 0.025:
+            ranking = local
+            tip = "The surrounding pixels change gradually. Local can continue this lighting. Include any cast shadow."
+        elif f["range"] > 0.20:
+            ranking = (*rorem, *lama, *local)
+            tip = "Soft lighting curves across a form near the selection. Inspect its outline after removal."
+        else:
+            ranking = (*lama, *rorem, *local)
+            tip = "There is faint texture beyond the selection. Check that the fill carries it across the repair."
+    elif f["chroma"] < 0.10 and f["edge"] > 0.32 and f["range"] > 0.52:
+        ranking = (*lama, *rorem, *local)
+        tip = "There is fine, high-contrast detail here. If it is lettering, use a reference to restore the exact text."
+    elif f["coverage"] >= 0.20 and f["cool"] >= 0.80 and f["aspect"] < 2:
+        ranking = (*fibo, *lama, *rorem, *local)
+        tip = "A broad selection crosses blue-green texture. Check how the fill continues the surrounding lighting."
+    elif f["aspect"] >= 1.8 and f["range"] > 0.55 and f["highlights"] > 0:
+        ranking = (*rorem, *lama, *local)
+        tip = "This elongated area crosses bright and dark surfaces. Inspect their edges where they meet the repair."
+    elif f["coverage"] >= 0.12 and f["aspect"] < 1.8 and f["jump"] > 0.18:
+        ranking = (*qwen, *lama, *rorem, *local)
+        tip = "A substantial area spans distinct edges. Check reconstructed shapes against a reference if precision matters."
+    else:
+        ranking = (*lama, *rorem, *fibo, *local)
+        tip = "The surrounding pixels contain edges or texture. A masked repair can continue nearby detail."
+    ids = set(available) | {TEXTURE_REMOVAL}
+    method = next(i for i in ranking if i in ids)
+    if method == TEXTURE_REMOVAL and ranking != local:
+        tip = "Local is the available fallback. Check for repeated texture or broken edges in this selection."
+    default = next((i for i in ("lama-big", "mat-places512") if i in ids), None)
+    display = "default" if not existing_server and method == default else method
+    return {"method": method, "displayMethod": display, "tip": tip}
 
 
 def removal_scenes(available, existing_server):

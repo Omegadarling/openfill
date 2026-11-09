@@ -26,10 +26,11 @@ from openfill.supervisor import process_name
 from .bridge import PCImage, PCLayer, PhotoCraftBridge
 from .control import ControlClient, ControlError
 from .references import ReferenceImages
+from .removal_advice import TEXTURE_REMOVAL, recommend
+from .selection_advice import SelectionSampler, live_selection_key, selection_key
 
 NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection. Select > All works on the whole image."
-TEXTURE_REMOVAL = "photocraft-texture"
-TEXTURE_LABEL = "Local removal (automatic)"
+TEXTURE_LABEL = "Local background repair"
 REMOVE_SELECTION = "Select the object and its shadow, leaving some background outside the selection."
 
 
@@ -144,6 +145,7 @@ class Service:
         self._thread: threading.Thread | None = None
         self._operation_lock = threading.Lock()
         self.references = ReferenceImages()
+        self.advice_sampler = SelectionSampler(client)
         self._switching = False
         self.watcher = None  # menu.Watcher, set by the launcher: keeps the document's facts current
         self.engine = ""  # "" not started by us, "starting", "ready", or why it failed
@@ -237,23 +239,47 @@ class Service:
         if self.watcher is not None:
             return self.watcher.snapshot()
         try:
-            image = self.bridge.active_image()
-            if image is None:
+            ui = self.client.call("ui.inspect")
+            session = ui.get("session") or {}
+            d = ui.get("document") or {}
+            if not d:
                 return {"connected": True, "document": None}
-            d = self.client.run("document.inspect")
             sel = d.get("selectionBounds") if d.get("hasSelection") else None
             return {
                 "connected": True,
                 "document": {
-                    "name": image.name,
+                    "name": d.get("name"),
                     "width": d.get("width"),
                     "height": d.get("height"),
                     "mode": d.get("mode"),
                 },
                 "selection": sel,
+                "selectionKey": selection_key(
+                    session.get("active"),
+                    d.get("name"),
+                    d.get("revision"),
+                    d.get("width"),
+                    d.get("height"),
+                    sel,
+                    d.get("activeLayer"),
+                ),
             }
         except ControlError as err:
             return {"connected": False, "error": str(err)}
+
+    def removal_advice(self, available):
+        """Read pixels locally and resolve the result against this panel's visible remover inventory."""
+        if self.busy() or self.layers:
+            return {
+                "status": "paused",
+                "tip": "Choose a Method to compare another repair, or keep or discard the current result.",
+            }
+        result = self.advice_sampler.request(self.photocraft())
+        if result["status"] == "ready":
+            existing = self.app.settings.remote_fibo
+            result.update(recommend(result.pop("features"), available, existing))
+            result["source"] = self.app.settings.fibo_source if existing else ""
+        return result
 
     # jobs -------------------------------------------------------------------------------
 
@@ -320,6 +346,22 @@ class Service:
                 raise RuntimeError("Describe the desired edit or selected content.")
         if self.busy():
             raise RuntimeError("A job is already running.")
+        if removing and "adviceKey" in params:
+            key = params["adviceKey"]
+            if not key or live_selection_key(self.client) != key:
+                raise RuntimeError("The selection changed. Wait for the updated suggestion and press Remove again.")
+            visible = []
+            if params.get("removal") != TEXTURE_REMOVAL:
+                visible = [
+                    e.id for e in self.app.installed_models("remove") if e.id not in self.app.settings.hidden_models
+                ]
+            fresh = self.removal_advice(visible)
+            if (fresh.get("key"), fresh.get("method"), fresh.get("source")) != (
+                key,
+                params.get("removal"),
+                params.get("adviceSource"),
+            ):
+                raise RuntimeError("The removal suggestion changed. Review the current Method and press Remove again.")
         use_references = params.get("useReferences", False)
         if not isinstance(use_references, bool):
             raise ValueError("Reference use must be on or off.")
@@ -396,6 +438,8 @@ class Service:
                 self.state.text = "Starting the AI engine (the first time takes about a minute)..."
             self._warm.join()  # one start of ComfyUI, not two
         try:
+            if p.get("adviceKey") and live_selection_key(self.client) != p["adviceKey"]:
+                raise RuntimeError("The selection changed before removal started. Review the updated suggestion.")
             image = self.bridge.active_image() if kind != "txt2img" or p.get("target") == "layer" else None
             if kind != "txt2img" and image is None:
                 raise RuntimeError("Open an image in PhotoCraft first.")
@@ -414,6 +458,8 @@ class Service:
                 self.bridge.track(image)
                 base = self.bridge.history(image)
             revision = self.bridge._revision(image) if previous or (kind == "fill" and p.get("remove")) else None
+            if p.get("adviceKey") and live_selection_key(self.client) != p["adviceKey"]:
+                raise RuntimeError("The selection changed before removal started. Review the updated suggestion.")
             if previous and (
                 not self._expected_history or base != self._expected_history or revision != self._expected_revision
             ):

@@ -1,5 +1,9 @@
 # OpenFill for PhotoCraft development notes
 
+Automatic removal advice uses the read-only `document.sampleColor` command and the active selection bounds. A narrow sampling ring can mistake a defocused form for a flat wall. Checking how lighting changes farther out helped on a sticker over a clock and a tag on lunar terrain. Reserve the full mask export for the requested removal. Confirm the same stamped selection and source at submission.
+
+Inspect crops against the actual mask. Big-LaMa replaced the middle of three coins with another coin. Local and RORem cleared it. A quiet border with distinct objects just beyond it can favor local repair.
+
 Read this before editing the companion. This branch starts at OpenFill `photocraft-v0.2.4`. PhotoCraft-specific UI and control code live in `photocraft/openfill_photocraft`. The shared engine is in `gimp-openfill/openfill`. Build the distribution with `tools/make_photocraft_zip.py`.
 
 - Compare removal models on the same frozen input, selection and seed. Local suits smooth lighting, LaMa suits thin obstructions and paving, and Qwen Lightning can reconstruct recognizable geometry. RORem is a separate erase-trained model. Keep removal-only entries out of Image Edit and resolve suggestions against visible, available methods.

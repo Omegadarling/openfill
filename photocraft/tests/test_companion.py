@@ -1056,7 +1056,7 @@ class BarLogicTests(unittest.TestCase):
         self.assertNotIn("refine:realvisxl-v5", choices.values())  # no two-pass Remove any more
         only_painters = {"active": "", "models": {"fill": self.FACTS["models"]["fill"]}}
         self.assertNotIn("default", removal_choices(only_painters).values())
-        self.assertEqual(removal_choices({}), {"Local removal (automatic)": "photocraft-texture"})
+        self.assertEqual(removal_choices({}), {"Local background repair": "photocraft-texture"})
 
     def test_fill_menu_also_offers_the_removal_models(self):
         try:

@@ -28,7 +28,7 @@ from PIL import Image, ImageDraw
 from . import ui
 from .menu import Watcher
 from .modelinfo import choose_card_line, download_card_line, hardware_line, needed_by
-from .removal_advice import SCENE_PLACEHOLDER, SELECTION_HINT, removal_scenes
+from .removal_advice import AUTO, SCENE_PLACEHOLDER, SELECTION_HINT, removal_scenes
 from .service import REMOVE_SELECTION, TEXTURE_LABEL, TEXTURE_REMOVAL, Service
 from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
 
@@ -470,7 +470,9 @@ class Bar:
             self._row(self.remove_scene_row, "Suggest for"), ui.FIELD_W, command=self._scene_picked
         )
         self.remove_scene_box.pack(side="left")
-        self.remove_scene = ""
+        self.remove_scene = self.prefs.get("removalGuide", AUTO)
+        self._advice = {}
+        self._quick_remove = ""
         self.scene_choices = {}
         self.remove_line = ui.small(m, SELECTION_HINT, wrap=CW)
 
@@ -946,7 +948,10 @@ class Bar:
             self.select_tab(action)
             self.select_view("edit")
         if action == "remove":
-            self.generate()
+            if self.remove_scene == AUTO:
+                self._quick_remove = self.watcher.snapshot().get("selectionKey") or ""
+            else:
+                self.generate()
         elif action in ("fill", "txt2img", "expand", "", "panel") and "edit" not in self.sections.collapsed:
             self.root.focus_force()
             self.prompt.focus()
@@ -988,6 +993,7 @@ class Bar:
             key = "fill"
         self.model_box.close()
         if key != self.tab.get():
+            self._quick_remove = ""
             self._note = None
             self.model_choice.set("")
         self.tab.set(key)
@@ -1092,7 +1098,9 @@ class Bar:
 
     def _scene_picked(self, label: str) -> None:
         choice = self.scene_choices.get(label)
-        self.remove_scene = label if choice else ""
+        self.remove_scene = label if choice or label == AUTO else ""
+        self._quick_remove = ""
+        self.prefs["removalGuide"] = self.remove_scene
         if choice and choice["method"]:
             name = next((n for n, i in self._model_ids.items() if i == choice["method"]), None)
             if name:
@@ -1103,7 +1111,10 @@ class Bar:
     def _model_picked(self, label: str) -> None:
         """The Model select: the model picked becomes the active one (Remove keeps its own
         choice; a removal model picked in Fill is used for that run only)."""
-        self.remove_scene = ""
+        if self.tab.get() == "remove":
+            self.remove_scene = ""
+            self._quick_remove = ""
+            self.prefs["removalGuide"] = ""
         self.model_choice.set(label)
         self._fill_models()
         if self.tab.get() == "remove":
@@ -1153,6 +1164,11 @@ class Bar:
                     body["useReferences"] = True
                 if kind == "remove":
                     removal = self._model_ids.get(self.model_choice.get(), "default")
+                    if self.remove_scene == AUTO:
+                        if self._advice.get("status") != "ready":
+                            return
+                        removal = self._advice["method"]
+                        body.update(adviceKey=self._advice["key"], adviceSource=self._advice["source"])
                     body.update(removal=removal)
                     if removal in (*PROMPT_FREE, "default", "remote-lama-rmbg"):
                         body.update(variations=1)  # same input, same result: one is enough
@@ -1294,6 +1310,8 @@ class Bar:
         if tab == "remove":
             choices = removal_choices(shown_facts, existing_server=self.service.app.settings.remote_fibo)
             wanted = self.prefs.get("removal", "")
+            if wanted == "Local removal (automatic)":
+                wanted = TEXTURE_LABEL
         else:
             choices = (
                 fill_choices(shown_facts, existing_server=self.service.app.settings.remote_fibo)
@@ -1321,19 +1339,38 @@ class Bar:
         else:
             shown = current
         self.model_box.set(shown)
+        waiting_for_advice = False
         if tab == "remove":
+            available = [i for i, _ in models.get("remove", [])]
             self.scene_choices = {
-                r["scene"]: r
-                for r in removal_scenes((i for i, _ in models.get("remove", [])), self.service.app.settings.remote_fibo)
+                r["scene"]: r for r in removal_scenes(available, self.service.app.settings.remote_fibo)
             }
-            values = [SCENE_PLACEHOLDER, *self.scene_choices]
+            values = [AUTO, SCENE_PLACEHOLDER, *self.scene_choices]
             if self.remove_scene_box.values != values:
                 self.remove_scene_box.set_values(values)
             scene = self.scene_choices.get(self.remove_scene)
             if scene and scene["method"] and scene["method"] != choices.get(current):
                 self.remove_scene, scene = "", None
+            tip = scene["tip"] if scene else SELECTION_HINT
+            if self.remove_scene == AUTO:
+                if self.collapsed:
+                    self._advice = {}
+                elif self.service.app.settings.remote_fibo and facts.get("comfy_ok", True) and "active" not in facts:
+                    self._advice = {"status": "loading", "tip": "Checking available removal methods…"}
+                else:
+                    self._advice = self.service.removal_advice(available)
+                tip = self._advice.get("tip", SELECTION_HINT)
+                label = next((n for n, i in choices.items() if i == self._advice.get("displayMethod")), "")
+                waiting_for_advice = not label
+                if label:
+                    self.model_choice.set(label)
+                    self.model_box.set(label)
+                else:
+                    self.model_box.set(
+                        "Choose a method…" if self._advice.get("status") != "sampling" else "Reading selection…"
+                    )
             self.remove_scene_box.set(self.remove_scene or SCENE_PLACEHOLDER)
-            self.remove_line.configure(text=scene["tip"] if scene else SELECTION_HINT)
+            self.remove_line.configure(text=tip)
         busy = self.service.busy()
         limit, syntax = self._reference_options(facts)
         self.references.refresh(limit, syntax, busy)
@@ -1352,7 +1389,12 @@ class Bar:
                 self.reference_status.pack(anchor="w", pady=(6, 0))
         elif self.reference_status.winfo_manager():
             self.reference_status.pack_forget()
-        self.go.set(disabled=busy or not names or (bool(limit) and (count > limit or self.references.adding)))
+        self.go.set(
+            disabled=busy
+            or waiting_for_advice
+            or not names
+            or (bool(limit) and (count > limit or self.references.adding))
+        )
 
     def _context_base(self) -> tuple[str, str, str]:
         """(text, colour, icon) for the line under the modes."""
@@ -1429,6 +1471,16 @@ class Bar:
         self.sections.apply(self.service.app.settings.panel_layout)
         self._update_context()
         self._fill_models()
+        if self._quick_remove:
+            if (
+                self.collapsed
+                or self._quick_remove != self.watcher.snapshot().get("selectionKey")
+                or self._advice.get("status") in ("paused", "empty", "unavailable")
+            ):
+                self._quick_remove = ""
+            elif not self.go.disabled:
+                self._quick_remove = ""
+                self.generate()
         status = self._engine_status(facts)
         if self._shown.get("status") != status:
             self._shown["status"] = status

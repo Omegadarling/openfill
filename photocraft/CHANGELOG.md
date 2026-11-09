@@ -5,6 +5,11 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-11-08
+
+- Remove now suggests an available model from the active selection and its surrounding composite pixels. Both panels show the reason and support manual override.
+- The local sampler reads PhotoCraft directly. Switching documents, revising a selection or changing sources invalidates stale suggestions before a removal can run.
+
 ## [0.15.0] - 2026-11-08
 
 - Added selectable Big-LaMa, RORem and Qwen Image 2.1 Lightning removal on compatible existing servers. Both panels offer scene-based suggestions and manual choice.
