@@ -114,6 +114,28 @@ class InlinePanelTests(unittest.TestCase):
         ui.FONTS = None
         root.destroy()
 
+    def test_select_click_uses_image_area_and_never_submits_edit_settings(self):
+        bar, view = self.bar, self.bar.select_view_panel
+        self.service.layers = []
+        bar.tab_buttons["select"].invoke()
+        pc = bar.watcher.snapshot.return_value
+        pc.update(documentKey="canvas", document={"name": "portrait", "width": 100, "height": 200})
+        view._ready("canvas", Image.new("RGB", (80, 160)), "")
+        left, top, width, height = view.rect
+        self.assertTrue(view.winfo_manager())
+        self.assertFalse(bar.options.winfo_manager() or bar.prompt.winfo_manager())
+        view._click(SimpleNamespace(x=left - 1, y=top))
+        self.service.start.assert_not_called()
+        view._operation("add")
+        view._click(SimpleNamespace(x=left + width // 2, y=top + height // 4))
+        self.service.start.assert_called_once_with(
+            "select", {"key": "canvas", "action": "click", "query": "", "operation": "add", "point": [0.5, 0.25]}
+        )
+        bar.tab_buttons["remove"].invoke()
+        self.assertFalse(view.winfo_manager())
+        self.assertTrue(bar.options.winfo_manager())
+        self.assertEqual(list(bar.tab_buttons), ["select", "fill", "remove"])
+
     def test_drag_and_collapse_persist_and_restore(self):
         from openfill_photocraft.panels import SectionStack
 

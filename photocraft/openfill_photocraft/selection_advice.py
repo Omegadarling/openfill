@@ -9,11 +9,16 @@ import threading
 from statistics import median
 
 
-def selection_key(index, name, revision, width, height, bounds, active_layer=None):
-    if not bounds or index is None:
+def document_key(index, name, revision, width, height, bounds, active_layer=None):
+    """Identify the view used for a click, including documents without a selection."""
+    if index is None or not name:
         return ""
-    fields = [index, name, revision, active_layer, width, height, list(bounds)]
+    fields = [index, name, revision, active_layer, width, height, list(bounds) if bounds else None]
     return hashlib.sha256(json.dumps(fields, ensure_ascii=True).encode()).hexdigest()[:24]
+
+
+def selection_key(index, name, revision, width, height, bounds, active_layer=None):
+    return document_key(index, name, revision, width, height, bounds, active_layer) if bounds else ""
 
 
 def live_selection_key(client):

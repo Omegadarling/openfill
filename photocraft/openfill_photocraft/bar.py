@@ -40,12 +40,19 @@ PREVIEW_MAX = (CW - 24, 230)
 THUMB_H = 72
 THUMB_COLUMNS = 5
 
-TABS = (("fill", "Fill"), ("remove", "Remove"), ("expand", "Expand"), ("txt2img", "Create"))
+TABS = (("select", "Select"), ("fill", "Edit"), ("remove", "Remove"))
+EDIT_TOOLS = (("fill", "Fill"), ("expand", "Expand"), ("txt2img", "Create"))
 CREATE_SIZES = (("Square", 1024, 1024), ("Landscape", 1216, 832), ("Portrait", 832, 1216))
 STARTER = ("lama-big", "dreamshaper-8-inpainting")
 HEAD_H = 45  # the header and its divider
 FOOTER_H = 65  # the action bar: divider, 12 px, a 36 px button, 16 px
-GO = {"fill": "Generate", "remove": "Remove", "expand": "Expand", "txt2img": "Create"}
+GO = {
+    "select": "Select by description",
+    "fill": "Generate",
+    "remove": "Remove",
+    "expand": "Expand",
+    "txt2img": "Create",
+}
 PLACEHOLDERS = {
     "fill": "Describe what to add, or leave it empty to fill from the surroundings.",
     "expand": "Optional: describe what the new area shows.",
@@ -457,9 +464,12 @@ class Bar:
         self.bottom_gap.pack(fill="x")
 
         m = self.main
-        tabs = (("fill", "Image Edit"), ("remove", "Remove")) if self.service.app.settings.remote_fibo else TABS
-        self.modes = ui.Seg(m, tabs, self.select_tab, CW, 13)
-        self.tab_buttons = {key: _SegKey(self.modes, key) for key, _label in tabs}
+        self.modes = ui.Seg(m, TABS, self.select_tab, CW, 13)
+        self.tab_buttons = {key: _SegKey(self.modes, key) for key, _label in TABS}
+        self.edit_tools = ui.Seg(m, EDIT_TOOLS, self.select_tab, CW, 12)
+        from .select_view import SelectView
+
+        self.select_view_panel = SelectView(self, m)
         self.context_row = ui.frame(m)
         self.context_icon = tk.Label(self.context_row, bg=BG, bd=0, highlightthickness=0)
         self.context_icon.pack(side="left", anchor="n", pady=(1, 0))
@@ -944,7 +954,7 @@ class Bar:
         self.expand()
         if action in ("models", "engine", "settings", "generation"):
             self.select_view("engine" if action == "settings" else action)
-        elif action in dict(TABS):
+        elif action in GO:
             self.select_tab(action)
             self.select_view("edit")
         if action == "remove":
@@ -989,7 +999,7 @@ class Bar:
             self._select_tab(key)
 
     def _select_tab(self, key: str) -> None:
-        if self.service.app.settings.remote_fibo and key not in ("fill", "remove"):
+        if self.service.app.settings.remote_fibo and key not in ("select", "fill", "remove"):
             key = "fill"
         self.model_box.close()
         if key != self.tab.get():
@@ -998,7 +1008,10 @@ class Bar:
             self.model_choice.set("")
         self.tab.set(key)
         self.model_label.set("Method" if key == "remove" else "Model")
-        self.modes.set(key)
+        self.modes.set("fill" if key in ("expand", "txt2img") else key)
+        self.edit_tools.set(key if key in dict(EDIT_TOOLS) else "fill")
+        self.sections.hidden = {"references", "generation"} if key == "select" else set()
+        self.sections.apply(self.service.app.settings.panel_layout)
         if key in PLACEHOLDERS:
             self.prompt.set_placeholder(
                 "Qwen and FIBO: describe the change. SDXL: describe what should appear in the selection. Select All to edit the whole image."
@@ -1016,6 +1029,10 @@ class Bar:
         """Pack the tool view's parts for the current mode (12 px apart)."""
         key = self.tab.get()
         parts: list[tk.Misc] = [self.modes, self.context_row]
+        if key == "select":
+            parts.append(self.select_view_panel)
+        if not self.service.app.settings.remote_fibo and key in dict(EDIT_TOOLS):
+            parts.insert(1, self.edit_tools)
         if key == "remove":
             parts.extend((self.remove_scene_row, self.remove_line))
         if key == "expand":
@@ -1024,8 +1041,9 @@ class Bar:
             parts.append(self.prompt)
         if key == "txt2img":
             parts.append(self.create_rows)
-        parts.append(self.options)
-        if self._shown.get("setup"):
+        if key != "select":
+            parts.append(self.options)
+        if key != "select" and self._shown.get("setup"):
             parts.append(self.setup)
         if self._shown.get("job"):
             parts.append(self.job)
@@ -1063,13 +1081,17 @@ class Bar:
 
         def work() -> None:
             try:
-                image = self.service.bridge.active_image()
-                if image is not None:
+                with self.service._operation_lock:
+                    if self.service.busy() or self.expand_view.image_key != key:
+                        return
+                    image = self.service.bridge.active_image()
+                    if image is None:
+                        return
                     visible, _selection = self.service.bridge._snapshot(image)
-                    thumb = visible.copy()
-                    thumb.thumbnail((420, 420))
-                    if self.expand_view.image_key == key:
-                        self.call_soon(self.expand_view.set_thumbnail, thumb)
+                thumb = visible.copy()
+                thumb.thumbnail((420, 420))
+                if self.expand_view.image_key == key:
+                    self.call_soon(self.expand_view.set_thumbnail, thumb)
             except Exception:  # noqa: BLE001 - the editor works without a thumbnail
                 pass
             finally:
@@ -1136,6 +1158,9 @@ class Bar:
         if self.service.busy() or self.go.disabled:
             return
         kind, prompt = self.tab.get(), self.prompt.get().strip()
+        if kind == "select":
+            self.select_view_panel.submit("describe")
+            return
         independent_removal = kind == "remove" and (
             self.service.app.settings.remote_fibo or self._model() == TEXTURE_REMOVAL
         )
@@ -1298,6 +1323,9 @@ class Bar:
     def _fill_models(self) -> None:
         facts = self.refresher.get()
         tab = self.tab.get()
+        if tab == "select":
+            self.select_view_panel.update_view()
+            return
         all_models = facts.get("models") or {}
         hidden = set(self.service.app.settings.hidden_models)
         models = {
@@ -1412,6 +1440,11 @@ class Bar:
             return "Makes a new image" + (f", or a layer in {doc['name']}" if doc else ""), DIM, "image"
         if not doc:
             return "Open an image in PhotoCraft.", DIM, "image"
+        if tab == "select":
+            if self.service.layers:
+                return "Keep or discard the current choices before changing the selection.", WARN, "info"
+            detail = f"selection {sel[2]} × {sel[3]} px" if sel else "no selection"
+            return f"{doc['name']} · {detail}", DIM, "selection"
         if tab in ("fill", "remove"):
             if sel:
                 return f"{doc['name']} · selection {sel[2]} x {sel[3]} px", DIM, "selection"
@@ -1451,6 +1484,8 @@ class Bar:
             self.root.after(250, self._tick)
 
     def _engine_status(self, facts: dict[str, Any]) -> str:
+        if self.tab.get() == "select":
+            return "Select"
         if self.tab.get() == "remove" and self._model() == TEXTURE_REMOVAL:
             return "Ready"
         engine = self.service.engine
@@ -1499,7 +1534,9 @@ class Bar:
         if self.collapsed:
             if st["state"] == "running":
                 kind = "Remove" if (st["title"] or "").startswith(("Remove", "Object")) else None
-                kind = kind or {"fill": "Fill", "expand": "Expand", "txt2img": "Create"}.get(st["kind"], "Working")
+                kind = kind or {"select": "Select", "fill": "Edit", "expand": "Expand", "txt2img": "Create"}.get(
+                    st["kind"], "Working"
+                )
                 self._draw_pill(f"{kind}: {int(st['fraction'] * 100)}%", ACCENT, st["fraction"])
             elif st["state"] == "done" and st["variations"]:
                 self.expand()  # pick a variation
@@ -1629,7 +1666,8 @@ class Bar:
         if st["state"] == "running":
             text, color, font = f"{st['text']} · {clock}", DIM, self.small
         elif st["state"] == "done":
-            text, color, font = st.get("removalSummary") or f"Done in {clock}.", OK, self.fonts.body
+            text = st["message"] if st["kind"] == "select" else st.get("removalSummary") or f"Done in {clock}."
+            color, font = OK, self.fonts.body
         elif st["state"] == "cancelled":
             text, color, font = st["message"], DIM, self.fonts.body
         else:

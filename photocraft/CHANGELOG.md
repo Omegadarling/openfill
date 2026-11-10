@@ -5,6 +5,12 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-11-10
+
+- The native and browser panels now have three top-level modes: **Select**, **Edit**, and **Remove**. In managed mode, Fill, Expand, and Create are available under Edit.
+- Select an object by clicking its image in the panel, or ask WeVisOne-VL for a selection by description. Replace, add, or subtract real PhotoCraft selections with soft edges.
+- **Grow** expands any existing selection by 1–64 document pixels per press, including selections made with a lasso. Each press is a separate Undo step and needs no model.
+
 ## [0.16.2] - 2026-11-09
 
 - Fixed Local removal copying distant people or objects into a selection on a subtly patterned background. When the colors just outside the lasso agree, PhotoCraft samples matching background patches. Gradients and boundaries spanning different colors retain their existing repair methods.

@@ -48,7 +48,7 @@ SETTINGS = (
     ("extra_server_args", "Extra ComfyUI options", str),
 )
 SECTIONS = {
-    "edit": "Image Edit",
+    "edit": "Tools",
     "references": "Reference Images",
     "models": "Manage Models",
     "engine": "Engine",
@@ -75,6 +75,8 @@ class SectionStack(tk.Frame):
         self.scroller, self.save, self.on_error = scroller, save, on_error
         self.frames, self.headers, self.bodies, self.toggles, self.grips = {}, {}, {}, {}, {}
         self.order: list[str] = []
+        self.hidden: set[str] = set()
+        self._shown_order = None
         self.collapsed: set[str] = set()
         self.dragged: str | None = None
         self._drag_y = 0
@@ -136,11 +138,13 @@ class SectionStack(tk.Frame):
         if self.dragged is not None:
             return
         order, collapsed = list(layout["order"]), set(layout["collapsed"])
-        if self.order != order:
+        shown = [key for key in order if key not in self.hidden]
+        if self._shown_order != shown:
             for frame in self.frames.values():
                 frame.pack_forget()
-            for key in order:
+            for key in shown:
                 self.frames[key].pack(fill="x", pady=(8, 0))
+            self._shown_order = shown
         if self.collapsed != collapsed or not self.order:
             for key in order:
                 closed = key in collapsed
@@ -171,13 +175,13 @@ class SectionStack(tk.Frame):
         event.widget.configure(fg=ACCENT)
 
     def _destination(self, y: int) -> tuple[list[str], int]:
-        others = [key for key in self.order if key != self.dragged]
+        others = [key for key in self._shown_order if key != self.dragged]
         index = sum(y >= self.headers[key].winfo_rooty() + self.headers[key].winfo_height() / 2 for key in others)
         return others, index
 
     def _show_drop(self) -> None:
         others, index = self._destination(self._drag_y)
-        marker = others[min(index, len(others) - 1)] if index != self.order.index(self.dragged) else None
+        marker = others[min(index, len(others) - 1)] if index != self._shown_order.index(self.dragged) else None
         if self._marker is not None:
             self.grips[self._marker].configure(bg=PANEL, fg=DIM, text="⠿")
         self._marker = marker
@@ -226,15 +230,19 @@ class SectionStack(tk.Frame):
             others, index = self._destination(event.y_root)
             self._cancel_drag()
             others.insert(index, key)
-            self._commit(others, self.collapsed)
+            self._commit_visible(others)
+
+    def _commit_visible(self, shown) -> None:
+        iterator = iter(shown)
+        self._commit([key if key in self.hidden else next(iterator) for key in self.order], self.collapsed)
 
     def _move_one(self, key: str, direction: int) -> str:
-        index = self.order.index(key)
+        order = self._shown_order.copy()
+        index = order.index(key)
         destination = index + direction
-        if 0 <= destination < len(self.order):
-            order = self.order.copy()
+        if 0 <= destination < len(order):
             order[index], order[destination] = order[destination], order[index]
-            self._commit(order, self.collapsed)
+            self._commit_visible(order)
             self.grips[key].focus_set()
         return "break"
 

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .control import ControlClient, ControlError
-from .selection_advice import selection_key
+from .selection_advice import document_key, selection_key
 
 # (action, menu label). The label is also the name of the history step the entry leaves.
 # One entry: everything else is in the OpenFill bar it opens.
@@ -196,6 +196,9 @@ class DocInfo:
             "waiting": self.waiting,
             "document": {"name": self.name, "width": self.width, "height": self.height, "mode": self.mode},
             "selection": self.selection,
+            "documentKey": document_key(
+                self.index, self.name, self.revision, self.width, self.height, self.selection, self.active_layer
+            ),
             "selectionKey": selection_key(
                 self.index, self.name, self.revision, self.width, self.height, self.selection, self.active_layer
             ),

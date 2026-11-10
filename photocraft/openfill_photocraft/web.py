@@ -189,6 +189,8 @@ class Api:
 
     def post(self, path: str, body: dict[str, Any]) -> Any:
         svc, app = self.service, self.service.app
+        if path == "/api/select/preview":
+            return svc.selection_preview(body.get("key"))
         if path == "/api/removal-advice":
             available = body.get("available")
             if (
@@ -198,7 +200,7 @@ class Api:
             ):
                 raise ValueError("Expected a list of available removal model IDs.")
             return svc.removal_advice(available)
-        if path in ("/api/fill", "/api/expand", "/api/txt2img"):
+        if path in ("/api/select", "/api/fill", "/api/expand", "/api/txt2img"):
             svc.start(path.rsplit("/", 1)[1], body)
             return {"started": True}
         if path == "/api/show":

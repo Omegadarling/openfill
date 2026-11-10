@@ -1,10 +1,20 @@
 # OpenFill for PhotoCraft
 
-Generative Fill, Image Edit, Remove Object, Generative Expand, and Text to Image for [PhotoCraft](https://github.com/storytold/photocraft), using [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
+Select, edit, and remove objects in [PhotoCraft](https://github.com/storytold/photocraft), using [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
 
 **[Download the latest PhotoCraft installer](https://github.com/Omegadarling/openfill/releases/latest).** Choose the `openfill-photocraft-*.zip` asset and follow the instructions below for your platform.
 
 The standard tools share the engine from [upstream OpenFill](https://github.com/beckettharriman/openfill). This fork adds reference-guided editing with Qwen Image 2.1 and FIBO 2.0, a single rearrangeable settings panel, and the ability to add to a set of pending variations.
+
+## Select an object
+
+Open **Filter → Plug-ins → OpenFill**, then choose **Select**. Click inside an object in the panel's preview. Blue shows the selection. For a small or ambiguous target, type a description such as **the teaspoon beside the cup** and press **Select by description**. A description selects all matching instances; clicking with a description picks one under the pointer.
+
+Use **Add** to include another object or **Subtract** to take one out. Set **Grow selection** to the number of document pixels to expand (1–64, initially 4), then press **Grow**. Press it again for another expansion. Grow also works with a PhotoCraft lasso or marquee, even without ComfyUI. Each operation has its own Undo step. Switch straight to **Edit** or **Remove** to use the selection.
+
+**AI setup:** use a ComfyUI build with the built-in [WeVisOne-VL Detect node](https://github.com/Comfy-Org/ComfyUI/pull/17632). Put one of the [Comfy-Org WeVisOne-VL encoders](https://huggingface.co/Comfy-Org/WeVisOne-VL/tree/135355350443103e34089dd39264fe0651691929/text_encoders) in that server's `models/text_encoders` folder. Use the ComfyUI conversion, which includes the mask decoder. The 4B BF16 file is 9.7 GB; 2B and INT8 files are also supported. OpenFill discovers the file by its loader name. These weights are optional and are not part of the OpenFill download.
+
+Selection normally uses the configured ComfyUI server. For a separate local GPU engine, an optional `selection-engine.json` in the companion profile can specify `port`, absolute paths to `python`, `comfy_dir` (contains `main.py`) and `data_dir` (contains `models`), plus an optional `cuda_device` index. OpenFill starts this loopback engine on the first AI selection; Grow does not start it. This does not change the source used by Edit or Remove.
 
 ## Edit with an existing ComfyUI
 
@@ -18,7 +28,7 @@ The standard tools share the engine from [upstream OpenFill](https://github.com/
    }
    ```
 
-3. Reopen **PhotoCraft with OpenFill**. In **Engine**, use **Local ComfyUI** and press **Check**. This source uses `127.0.0.1:8188` for both a local server and a tunnel. Select the area to edit and choose a model in **Image Edit**. Use **Select All** when you want the edit to cover the whole image.
+3. Reopen **PhotoCraft with OpenFill**. In **Engine**, use **Local ComfyUI** and press **Check**. This source uses `127.0.0.1:8188` for both a local server and a tunnel. Select the area to edit and choose a model in **Edit**. Use **Select All** when you want the edit to cover the whole image.
 
 If the connection succeeds and your model is missing, check that the server sees the required files and nodes and that the model is enabled in **Manage Models**. To return to the managed engine and its Fill, Remove, Expand, and Create modes, set `"remote_fibo": false` while the companion is closed.
 
@@ -71,7 +81,7 @@ Custom builds can register additional named backends in [`sources.py`](https://g
 
 ## Existing-server models
 
-Image Edit discovers the supported Qwen and FIBO checkpoints when their companion weights and nodes are available. Use the [managed model catalog](#managed-engine-models) for the original Fill, Remove, Expand, and Create tools.
+Edit discovers the supported Qwen and FIBO checkpoints when their companion weights and nodes are available. Use the [managed model catalog](#managed-engine-models) for the original Fill, Remove, Expand, and Create tools.
 
 ### Qwen Image 2.1
 
@@ -100,7 +110,7 @@ In **Generation**, choose **Surrounding area** to give FIBO an adjustable crop a
 
 ### SDXL
 
-For SDXL out of the box, use the [managed engine](#managed-engine-models). Image Edit on an existing ComfyUI also supports verified full SDXL checkpoints with 4-channel base or 9-channel inpainting architectures. The public build’s registry starts empty. To add a checkpoint in a custom build, audit the SafeTensors header, verify the sampling workflow, and register the exact ComfyUI loader path and source ID. For the public loopback connection, including a LAN tunnel, the source ID is `local`. SDXL uses prompt and selection editing. Reference attachments are available with Qwen 2.1 and FIBO 2.0. [Registry](https://github.com/Omegadarling/openfill/blob/main/gimp-openfill/openfill/verified_sdxl.json) · [Registry format and validation](https://github.com/Omegadarling/openfill/blob/main/gimp-openfill/openfill/remote_sdxl.py)
+For SDXL out of the box, use the [managed engine](#managed-engine-models). Edit on an existing ComfyUI also supports verified full SDXL checkpoints with 4-channel base or 9-channel inpainting architectures. The public build’s registry starts empty. To add a checkpoint in a custom build, audit the SafeTensors header, verify the sampling workflow, and register the exact ComfyUI loader path and source ID. For the public loopback connection, including a LAN tunnel, the source ID is `local`. SDXL uses prompt and selection editing. Reference attachments are available with Qwen 2.1 and FIBO 2.0. [Registry](https://github.com/Omegadarling/openfill/blob/main/gimp-openfill/openfill/verified_sdxl.json) · [Registry format and validation](https://github.com/Omegadarling/openfill/blob/main/gimp-openfill/openfill/remote_sdxl.py)
 
 ### Reference images and panel layout
 
@@ -194,19 +204,20 @@ The panel floats independently; following PhotoCraft when it moves or minimizes 
 
 ## Using it
 
-Select an area in PhotoCraft (Marquee, Lasso, Object Selection), then type what you want in the OpenFill panel and press Enter. You can also pick **Filter > Plug-ins > OpenFill** in PhotoCraft to bring the panel back.
+Make a selection in OpenFill's Select mode or in PhotoCraft. In Edit, type the change you want and press Enter. You can also pick **Filter > Plug-ins > OpenFill** in PhotoCraft to bring the panel back.
 
 | Mode | What it does |
 |---|---|
-| Image Edit | Edits the selected region on an existing ComfyUI. Attach references with Qwen 2.1 or FIBO 2.0, or use a verified SDXL checkpoint for a prompt-based selection edit. |
-| Fill | Fills the selection from your prompt, or from the surroundings with no prompt. Up to 5 variations. |
+| Select | Click or describe an object, add or subtract matches, or grow the current selection. |
+| Edit | Edits the selected region on an existing ComfyUI. Attach references with Qwen 2.1 or FIBO 2.0, or use a verified SDXL checkpoint for a prompt-based selection edit. |
+| Edit → Fill | Fills the selection from your prompt, or from the surroundings with no prompt. Up to 5 variations. |
 | Remove | Fills an object's selection from nearby texture or reconstructs the background with FIBO on an existing server. Managed mode also offers LaMa and its other installed removers. |
-| Expand | Grows the canvas: drag the frame's edges, or pick a ratio (Original adds 25 % on each side; 1:1, 5:4, 4:3, 3:2 and 16:9, landscape or portrait). It paints the new edges. |
-| Create | Text to Image as a new image (square, landscape or portrait), or as a layer in the open image. With a selection, the layer fills the selection. |
+| Edit → Expand | Grows the canvas: drag the frame's edges, or pick a ratio (Original adds 25 % on each side; 1:1, 5:4, 4:3, 3:2 and 16:9, landscape or portrait). It paints the new edges. |
+| Edit → Create | Text to Image as a new image (square, landscape or portrait), or as a layer in the open image. With a selection, the layer fills the selection. |
 
-While it works you see a live preview. Click the result thumbnails to compare the edits in PhotoCraft. In Image Edit or Fill, click **Generate** again on the same document to add to the pending choices. The earlier choices stay visible while the new batch runs. Use **Keep**, **Keep all**, or **Discard** directly below the thumbnails to resolve the set.
+While it works you see a live preview. Click the result thumbnails to compare the edits in PhotoCraft. In Edit, click **Generate** again on the same document to add to the pending choices. The earlier choices stay visible while the new batch runs. Use **Keep**, **Keep all**, or **Discard** directly below the thumbnails to resolve the set.
 
-Every result is a new layer with a mask (variations go into a group), and it is **one step** in PhotoCraft's history: one Undo takes a fill or a whole expand back. Keep leaves it one step, and Discard takes it back completely. Your selection stays as it was, and the clipboard is never touched.
+Every generated image result is a new layer with a mask (variations go into a group), and it is **one step** in PhotoCraft's history: one Undo takes a fill or a whole expand back. Keep leaves it one step, and Discard takes it back completely. Your selection stays as it was, and the clipboard is never touched.
 
 The panel stays with PhotoCraft and hides when PhotoCraft is minimized. The arrow at its top right folds it into a small strip. Expand **Manage Models** to manage model files, **Engine** for ComfyUI settings, or **Generation** for generation settings.
 

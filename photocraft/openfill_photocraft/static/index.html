@@ -132,12 +132,23 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 <main id="panel-sections" class="content">
   <section class="panel-section" data-panel="edit">
     <div class="section-head">
-      <button type="button" class="section-toggle" aria-controls="body-edit" aria-expanded="true">Image Edit</button>
-      <button type="button" class="grip" draggable="true" aria-label="Reorder Image Edit" title="Drag to reorder, or use the Up and Down arrows">⠿</button>
+      <button type="button" class="section-toggle" aria-controls="body-edit" aria-expanded="true">Tools</button>
+      <button type="button" class="grip" draggable="true" aria-label="Reorder Tools" title="Drag to reorder, or use the Up and Down arrows">⠿</button>
     </div>
     <div id="body-edit" class="section-body stack">
-    <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="fill" class="on">Fill</button><button data-mode="remove">Remove</button><button data-mode="expand">Expand</button><button data-mode="txt2img">Create</button></div>
+    <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="select">Select</button><button data-mode="fill" class="on">Edit</button><button data-mode="remove">Remove</button></div>
+    <div class="seg s12" id="edit-tools" role="group" aria-label="Edit tool" hidden><button data-tool="fill">Fill</button><button data-tool="expand">Expand</button><button data-tool="txt2img">Create</button></div>
     <div class="context" id="context"><span id="ctx-icon"></span><span id="ctx-text">Connecting to PhotoCraft...</span></div>
+    <div id="select-box" class="stack" hidden>
+      <div class="small">WeVisOne-VL · Click an object or describe it. Blue shows the current selection.</div>
+      <div style="display:grid;place-items:center;min-height:100px;background:#18191b;border-radius:5px">
+        <span class="small" id="select-placeholder">Reading the canvas…</span>
+        <img id="select-image" alt="Click an object in the current PhotoCraft canvas" hidden style="max-width:100%;max-height:300px;width:auto;height:auto;cursor:crosshair">
+      </div>
+      <div class="seg s12" id="select-ops" role="group" aria-label="Combine selection"><button data-op="replace" class="on">Replace</button><button data-op="add">Add</button><button data-op="subtract">Subtract</button></div>
+      <label class="field"><span class="label">Describe an object (optional)</span><input id="select-query" type="text" maxlength="500" placeholder="e.g. the cup on the left"></label>
+      <div class="row"><label for="select-radius">Grow selection</label><input id="select-radius" type="range" min="1" max="64" step="1" value="4" style="min-width:30px;flex:1"><output id="select-px" for="select-radius">4 px</output><button class="btn" id="select-grow">Grow</button></div>
+    </div>
     <div class="row" id="remove-scene-row" hidden><label for="remove-scene">Suggest for</label><div class="select"><select id="remove-scene"><option value="auto">Automatic from selection</option></select></div></div>
     <div class="small" id="remove-text" hidden>Select the object and its shadow. Remove includes a small edge margin to clear outlines.</div>
     <div class="stack" id="expand-box" hidden>
@@ -156,7 +167,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="small under" id="size-px">1024 x 1024 px</div>
       <div class="row"><label>Result as</label><div class="seg s12" id="targets"><button data-target="image" class="on">New image</button><button data-target="layer">Layer in this image</button></div></div>
     </div>
-    <div class="stack">
+    <div class="stack" id="model-options">
       <div class="row"><label>Variations</label><div class="seg s12" id="vars"><button class="on">1</button><button>2</button><button>3</button><button>4</button><button>5</button></div></div>
       <div class="row"><label>Model</label><div class="select"><select id="model" aria-label="Model"></select><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9a9ba2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></div>
     </div>
@@ -293,7 +304,7 @@ function svg(name,color,size){size=size||16;return `<svg aria-hidden="true" widt
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
 const short=n=>(n||"").split(" (")[0].trim()||n;
 const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0"};
-const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
+const GO={select:"Select by description",fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
 const REMOVE_SELECTION="Select the object and its shadow, leaving some background outside the selection.";
@@ -301,6 +312,52 @@ let mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=fa
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
 $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
+$("edit-tools").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.tool)};
+let selectKey="", fetchingKey="", retryPreview=0, combine="replace", submittingSelection=false;
+$("select-ops").onclick=e=>{const b=e.target.closest("button");if(b){combine=b.dataset.op;segPick($("select-ops"),b);selectButtons()}};
+$("select-radius").oninput=()=>{$("select-px").textContent=$("select-radius").value+" px"};
+$("select-grow").onclick=()=>submitSelection("grow");
+$("select-query").oninput=selectButtons;
+$("select-query").onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();submitSelection("describe")}};
+$("select-image").onclick=e=>{
+  const r=e.currentTarget.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
+  if(x>=0&&x<1&&y>=0&&y<1)submitSelection("click",[x,y]);
+};
+function selectButtons(){
+  if(mode!=="select")return;
+  const blocked=busy||pendingVariations||submittingSelection;
+  $("select-grow").disabled=blocked||!sel||!pc.documentKey;
+  $("go").disabled=blocked||!selectKey||selectKey!==pc.documentKey||!$("select-query").value.trim()||(combine==="subtract"&&!sel);
+}
+async function submitSelection(action,point){
+  if(mode!=="select"||busy||pendingVariations||submittingSelection)return;
+  const key=action==="grow"?pc.documentKey:selectKey;
+  if(!key||key!==pc.documentKey)return;
+  submittingSelection=true;selectButtons();
+  try{
+    await post("/api/select",{action,key,point,operation:combine,query:$("select-query").value.trim(),pixels:+$("select-radius").value});
+    await tick();
+  }catch(e){say(e.message,"bad")}finally{submittingSelection=false;selectButtons()}
+}
+async function selectPreview(){
+  if(document.hidden||layout.collapsed.includes("edit"))return;
+  const key=pc.documentKey||"", img=$("select-image"), hint=$("select-placeholder");
+  if(selectKey!==key||pendingVariations){
+    img.hidden=true;selectKey="";hint.hidden=false;
+    hint.textContent=pendingVariations?"Keep or discard the current choices first.":key?"Reading the canvas…":"Open an image in PhotoCraft.";
+  }
+  selectButtons();
+  if(!key||selectKey===key||fetchingKey||busy||pendingVariations||Date.now()<retryPreview)return;
+  fetchingKey=key;
+  try{
+    const result=await post("/api/select/preview",{key});
+    const url="data:image/jpeg;base64,"+result.image, picture=new Image();
+    picture.src=url;await picture.decode();
+    if(mode!=="select"||key!==pc.documentKey||result.key!==key||pendingVariations)return;
+    img.src=url;img.hidden=false;hint.hidden=true;selectKey=key;
+  }catch(e){retryPreview=Date.now()+2000;if(mode==="select"&&key===pc.documentKey)say(e.message,"bad")}
+  finally{fetchingKey="";selectButtons()}
+}
 $("vars").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("vars"),b);variations=+b.textContent}};
 $("sizes").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("sizes"),b);size=[+b.dataset.w,+b.dataset.h];$("size-px").textContent=`${size[0]} x ${size[1]} px`}};
 $("targets").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("targets"),b);target=b.dataset.target}};
@@ -365,11 +422,16 @@ $("remove-scene").onchange = () => {
   if (choice && choice.method && removalChoices().some(o => o[1] === choice.method)) removal = choice.method;
   fillSelect();refreshAdvice();
 };
-function setMode(m){if(remoteFibo&&m!=="remove")m="fill";mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
+function setMode(m){if(remoteFibo&&["expand","txt2img"].includes(m))m="fill";mode=m;note=null;
+  const edit=["fill","expand","txt2img"].includes(m),selecting=m==="select";
+  segPick($("modes"),$("modes").querySelector(`[data-mode="${edit?"fill":m}"]`));
+  segPick($("edit-tools"),$("edit-tools").querySelector(`[data-tool="${m}"]`));
+  $("edit-tools").hidden=remoteFibo||!edit;$("select-box").hidden=!selecting;$("model-options").hidden=selecting;
+  for(const id of ["references","generation"])document.querySelector(`[data-panel="${id}"]`).hidden=selecting;
   if(m!=="remove")quickRemove="";
   const label=m==="remove"?"Method":"Model";$("model").closest(".row").querySelector("label").textContent=label;$("model").setAttribute("aria-label",label);
-  $("remove-scene-row").hidden=m!=="remove";$("remove-text").hidden=m!=="remove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove";
-  $("advanced").hidden=remoteFibo||m!=="fill";$("prompt").placeholder=remoteFibo?"Qwen and FIBO: describe the change. SDXL: describe what should appear in the selection. Select All to edit the whole image.":PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets()}
+  $("remove-scene-row").hidden=m!=="remove";$("remove-text").hidden=m!=="remove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove"||selecting;
+  $("advanced").hidden=remoteFibo||m!=="fill";$("prompt").placeholder=remoteFibo?"Qwen and FIBO: describe the change. SDXL: describe what should appear in the selection. Select All to edit the whole image.":PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets();if(selecting)selectPreview()}
 const sections = new Map([...document.querySelectorAll("[data-panel]")].map(el => [el.dataset.panel, el]));
 let layout = {order: [...sections.keys()], collapsed: ["models", "engine", "generation"]};
 let layoutRevision = 0, layoutQueue = Promise.resolve(), dragged = null;
@@ -407,9 +469,11 @@ function openSection(id) {
   if (layout.collapsed.includes(id)) toggleSection(id, true);
   sections.get(id).scrollIntoView({block: "nearest"});
 }
+function visibleSections(){return layout.order.filter(key=>!sections.get(key).hidden)}
 function moveSection(id, index) {
-  const order = layout.order.filter(key => key !== id);
-  order.splice(index, 0, id);
+  const visible = visibleSections().filter(key => key !== id);
+  visible.splice(index, 0, id);
+  const order = layout.order.map(key=>sections.get(key).hidden?key:visible.shift());
   saveLayout({order, collapsed: layout.collapsed});
 }
 for (const [id, node] of sections) {
@@ -428,8 +492,8 @@ for (const [id, node] of sections) {
     const direction = {"ArrowUp": -1, "ArrowDown": 1}[event.key];
     if (!direction) return;
     event.preventDefault();
-    const index = layout.order.indexOf(id) + direction;
-    if (index >= 0 && index < layout.order.length) { moveSection(id, index); grip.focus(); }
+    const shown = visibleSections(), index = shown.indexOf(id) + direction;
+    if (index >= 0 && index < shown.length) { moveSection(id, index); grip.focus(); }
   };
   node.ondragover = event => {
     if (!dragged || dragged === id) return;
@@ -444,7 +508,7 @@ for (const [id, node] of sections) {
     if (!dragged || dragged === id) return;
     event.preventDefault();
     const bounds = node.getBoundingClientRect();
-    const index = layout.order.filter(key => key !== dragged).indexOf(id);
+    const index = visibleSections().filter(key => key !== dragged).indexOf(id);
     moveSection(dragged, index + (event.clientY > bounds.top + bounds.height / 2 ? 1 : 0));
     dragged = null;
   };
@@ -634,7 +698,7 @@ async function start(kind,body){
     say(e.message,"bad");
   }
 }
-$("go").onclick=()=>{if(busy||!$("model").value||$("model").value==="__manage")return;const prompt=$("prompt").value.trim(),model=$("model").value;
+$("go").onclick=()=>{if(mode==="select"){submitSelection("describe");return}if(busy||!$("model").value||$("model").value==="__manage")return;const prompt=$("prompt").value.trim(),model=$("model").value;
   if(mode==="fill"||mode==="remove"){if(!sel){say(mode==="remove"?REMOVE_SELECTION:NO_SEL,"bad");return}
     const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:remoteFibo?undefined:(mode==="fill"?+$("strength").value:1),seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
     if(mode==="remove"){if(selectedScene==="auto"&&autoWaiting())return;
@@ -663,6 +727,7 @@ function expSize(){if(!doc){$("exp-size").textContent="";return}const m=["left",
 function baseContext(){if(!pc.connected)return["Waiting for PhotoCraft...","dim","info"];if(pc.waiting)return["PhotoCraft is not answering. If its window is minimized or covered, bring it into view.","warn","warn"];
   if(mode==="txt2img"&&doc&&sel&&target==="layer")return[`A layer in ${doc.name}, on the selection (${sel[2]} x ${sel[3]} px)`,"dim","selection"];
   if(mode==="txt2img")return["Makes a new image"+(doc?`, or a layer in ${doc.name}`:""),"dim","image"];if(!doc)return["Open an image in PhotoCraft.","dim","image"];
+  if(mode==="select")return [doc.name+" · "+(sel?"selection "+sel[2]+" × "+sel[3]+" px":"no selection"),"dim","selection"];
   if(mode==="fill"||mode==="remove")return sel?[`${doc.name} · ${doc.width} x ${doc.height} · selection ${sel[2]} x ${sel[3]} px`,"dim","selection"]:[mode==="remove"?REMOVE_SELECTION:NO_SEL,"dim","selection"];
   return[`${doc.name} · ${doc.width} x ${doc.height} · pixels to add on each side`,"dim","image"]}
 function context(){let[t,k,i]=baseContext();if(note){if(note.base!==t)note=null;else{t=note.text;k=note.kind;i={bad:"error",ok:"check",warn:"warn"}[k]||"info"}}
@@ -680,6 +745,7 @@ function removalChoices(){const inst=usable(),rem=inst.filter(r=>(r.capabilities
   rem.concat(painters).forEach(r=>{if(r.id!==def)out.push([short(r.name),r.id])});
   return def?[...out,texture]:[texture,...out]}
 function fillSelect(){const s=$("model");let opts;
+  if(mode==="select"){selectButtons();return}
   if(mode==="remove"){opts=removalChoices();showRemovalGuide(opts)}
   else{const inst=usable();opts=inst.filter(r=>(r.capabilities||[]).includes(mode)).map(r=>[r.name,r.id]);
     // Fill also offers the removal models: with an empty prompt they remove (LaMa and MAT ignore a prompt, erasers use their own)
@@ -693,7 +759,7 @@ function fillSelect(){const s=$("model");let opts;
   s.value=waiting?"":want||"";drawReferences()}
 
 function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.statusText||"").startsWith("Downloading"))||models.find(r=>r.statusText==="Waiting");
-  if(mode==="remove"&&$("model").value===TEXTURE_REMOVAL)html="";
+  if(mode==="select"||(mode==="remove"&&$("model").value===TEXTURE_REMOVAL))html="";
   else if(!s.comfyReady&&s.remoteFibo)html=`<div class="head">${svg("warn",C.warn)}<span class="t">${esc(s.backendName)} is unavailable</span></div><div class="small">${esc(s.comfyProblem||"Start ComfyUI on the selected computer, then press Check.")}</div>`;
   else if(!s.comfyReady)html=`<div class="head">${svg("warn",C.warn)}<span class="t">AI engine not found</span></div><div class="small">OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it.</div><div style="display:flex;gap:8px"><button class="btn accent flex" id="setup-folder">Choose folder</button><button class="btn flex" id="setup-help">How to install</button></div>`;
   else if(dl){const pct=dl.statusText.startsWith("Downloading")?parseInt(dl.statusText.split(" ").pop()):0;html=`<div class="head">${svg("download",C.accent)}<span class="t">Downloading ${esc(short(dl.name))}</span><span class="r">${pct}%</span></div><div class="bar"><i style="width:${pct}%"></i></div><div class="small">You can keep working.</div>`}
@@ -744,7 +810,7 @@ function showVariations(job) {
 }
 async function tick(){
   let s;try{s=await get("/api/state")}catch(e){$("status").textContent="OpenFill stopped";return}
-  if(s.remoteFibo&&!remoteFibo){remoteFibo=true;document.querySelectorAll("[data-mode]").forEach(b=>{b.hidden=!["fill","remove"].includes(b.dataset.mode);if(b.dataset.mode==="fill")b.textContent="Image Edit"});
+  if(s.remoteFibo&&!remoteFibo){remoteFibo=true;
     $("token").closest(".stack").hidden=true;$("stop").hidden=true;$("save-engine").hidden=true;
     Array.from($("sec-engine").children).slice(0,5).forEach(e=>e.hidden=true);
     const remote=document.createElement("div");remote.className="stack";remote.innerHTML='<label class="field"><span class="label">Run edits on</span><select id="fibo-source" aria-label="ComfyUI source"></select></label><div class="small" id="source-detail"></div><div class="small">Start ComfyUI on the chosen computer. OpenFill connects to that source and lists its available Qwen, FIBO, and SDXL edit models.</div>';$("sec-engine").prepend(remote);
@@ -758,13 +824,14 @@ async function tick(){
   pc=s.photocraft||{};doc=pc.document||null;sel=pc.selection||null;comfy=s.comfyReady;
   if(s.activeModel!==activeId){activeId=s.activeModel||"";fillSelect()}
   const ready=comfy||(mode==="remove"&&$("model").value===TEXTURE_REMOVAL);
-  const st=ready?["Ready","ok"]:["Not set up","warn"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
+  const st=mode==="select"?["Select","dim"]:ready?["Ready","ok"]:["Not set up","warn"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
   context();if(mode==="expand"){presets();expSize()}setupCard(s);
   const j=s.job, running=j.state==="running";busy=s.busy||running;
   $("cancel").disabled=!!j.committing;$("cancel").textContent=j.committing?"Adding result...":"Cancel";
   $("go").disabled=busy||$("model").value===""||autoWaiting();
   $("go").hidden=running;$("cancel").hidden=!running;
   showVariations(j);
+  if(mode==="select")selectPreview();
   if(mode==="remove"&&selectedScene==="auto"){if(busy||pendingVariations)advice=null;fillSelect();refreshAdvice()}
   if(quickRemove && (busy || pendingVariations || quickRemove !== pc.selectionKey || advice?.status === "unavailable")) quickRemove = "";
   if(quickRemove && !autoWaiting()){quickRemove = "";$("go").click()}
@@ -772,7 +839,7 @@ async function tick(){
   if(j.state!=="idle"){$("jtitle").textContent=j.title||j.kind;$("jmodel").textContent=short(j.model||"");
     $("jbar").style.width=(j.fraction*100).toFixed(1)+"%";$("jbarbox").classList.toggle("done",j.state==="done");
     const t=$("jtext");if(j.state==="running"){t.className="run";t.textContent=`${j.text} · ${fmt(j.elapsed)}`}
-    else if(j.state==="done"){t.className="ok";t.textContent=j.removalSummary||`Done in ${fmt(j.elapsed)}.`}
+    else if(j.state==="done"){t.className="ok";t.textContent=j.kind==="select"?j.message:j.removalSummary||`Done in ${fmt(j.elapsed)}.`}
     else{t.className=j.state==="cancelled"?"dimmed":"bad";t.textContent=j.message}
     if(j.state!=="running")$("preview").hidden=true;
     else if(j.previewSeq!==lastSeq){lastSeq=j.previewSeq;const r=await fetch("/api/preview?t="+j.previewSeq,{headers:H});if(r.status===200){$("preview").src=URL.createObjectURL(await r.blob());$("preview").hidden=false}else $("preview").hidden=true}}

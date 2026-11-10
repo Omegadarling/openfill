@@ -27,6 +27,7 @@ from .bridge import PCImage, PCLayer, PhotoCraftBridge
 from .control import ControlClient, ControlError
 from .references import ReferenceImages
 from .removal_advice import TEXTURE_REMOVAL, recommend
+from .selection import Selection, key_for
 from .selection_advice import SelectionSampler, live_selection_key, selection_key
 
 NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection. Select > All works on the whole image."
@@ -148,6 +149,7 @@ class Service:
         self._operation_lock = threading.Lock()
         self.references = ReferenceImages()
         self.advice_sampler = SelectionSampler(client)
+        self.selection = Selection(bridge)
         self._switching = False
         self.watcher = None  # menu.Watcher, set by the launcher: keeps the document's facts current
         self.engine = ""  # "" not started by us, "starting", "ready", or why it failed
@@ -256,6 +258,7 @@ class Service:
                     "mode": d.get("mode"),
                 },
                 "selection": sel,
+                "documentKey": key_for(session.get("active"), d),
                 "selectionKey": selection_key(
                     session.get("active"),
                     d.get("name"),
@@ -282,6 +285,12 @@ class Service:
             result.update(recommend(result.pop("features"), available, existing))
             result["source"] = self.app.settings.fibo_source if existing else ""
         return result
+
+    def selection_preview(self, key):
+        with self._operation_lock:
+            if self.busy() or self.layers:
+                raise RuntimeError("Finish the current job and keep or discard its choices before selecting.")
+            return self.selection.capture(key)
 
     # jobs -------------------------------------------------------------------------------
 
@@ -324,7 +333,9 @@ class Service:
 
     def start(self, kind: str, params: dict[str, Any]) -> None:
         if not self._operation_lock.acquire(blocking=False):
-            raise RuntimeError("Wait for the source connection check to finish.")
+            if self._switching:
+                raise RuntimeError("Wait for the source connection check to finish.")
+            raise RuntimeError("OpenFill is reading the canvas. Try again in a moment.")
         try:
             self._start(kind, params)
         finally:
@@ -339,15 +350,20 @@ class Service:
     def _start(self, kind: str, params: dict[str, Any]) -> None:
         params = dict(params)
         removing = kind == "fill" and bool(params.get("remove"))
-        if self.app.settings.remote_fibo:
+        if self.app.settings.remote_fibo and kind != "select":
             if kind != "fill":
-                raise RuntimeError("Choose Image Edit or Remove for this ComfyUI source.")
+                raise RuntimeError("Choose Select, Edit, or Remove for this ComfyUI source.")
             if removing and params.get("removal", "default") in ("", "default", None):
                 params["removal"] = TEXTURE_REMOVAL
             if not removing and not str(params.get("prompt", "")).strip():
                 raise RuntimeError("Describe the desired edit or selected content.")
         if self.busy():
             raise RuntimeError("A job is already running.")
+        if kind == "select":
+            if self.layers:
+                raise RuntimeError("Keep or discard the current choices before changing the selection.")
+            self.selection.validate(params)
+            params = {k: params[k] for k in ("action", "key", "pixels", "query", "point", "operation") if k in params}
         if removing and "adviceKey" in params:
             key = params["adviceKey"]
             if not key or live_selection_key(self.client) != key:
@@ -392,11 +408,12 @@ class Service:
         with self.state.lock:
             self.state.state, self.state.kind, self.state.message, self.state.text = "running", kind, "", "Starting..."
             self.state.title = {
+                "select": "Grow selection" if params.get("action") == "grow" else "Object selection",
                 "fill": "Object Removal" if params.get("remove") else "Generative Fill",
                 "expand": "Generative Expand",
                 "txt2img": "Text to Image",
             }.get(kind, kind)
-            self.state.model = ""
+            self.state.model = "WeVisOne-VL" if kind == "select" and params.get("action") != "grow" else ""
             self.state.removal_summary = ""
             self.state.local_removal = local_removal
             self.state.fraction, self.state.started, self.state.finished = 0.0, time.time(), 0.0
@@ -411,12 +428,13 @@ class Service:
         with self.state.lock:
             committing = self.state.committing
             local_removal = self.state.local_removal
+            selecting = self.state.kind == "select"
             if not committing:
                 self.state.cancel_requested = True
         if committing:
             self._notice("The result is being added to PhotoCraft. Use Undo when it finishes to remove the edit.")
             return
-        if local_removal:
+        if local_removal or selecting:
             return  # The scratch fill checks cancellation before the result reaches the document.
         if self.app.settings.remote_fibo:
             backend = getattr(self.app, "_active_backend", None)
@@ -436,11 +454,24 @@ class Service:
 
     def _job(self, kind: str, p: dict[str, Any]) -> None:
         image = None
-        if not self.state.local_removal and self._warm is not None and self._warm.is_alive():
+        if kind != "select" and not self.state.local_removal and self._warm is not None and self._warm.is_alive():
             with self.state.lock:
                 self.state.text = "Starting the AI engine (the first time takes about a minute)..."
             self._warm.join()  # one start of ComfyUI, not two
         try:
+            if kind == "select":
+
+                def progress(fraction, message):
+                    with self.state.lock:
+                        self.state.fraction, self.state.text = fraction, message
+
+                message = self.selection.run(
+                    self.app, p, progress, lambda: self.state.cancel_requested, self._begin_commit
+                )
+                with self.state.lock:
+                    self.state.state, self.state.fraction = "done", 1.0
+                    self.state.text = self.state.message = message
+                return
             if p.get("adviceKey") and live_selection_key(self.client) != p["adviceKey"]:
                 raise RuntimeError("The selection changed before removal started. Review the updated suggestion.")
             image = self.bridge.active_image() if kind != "txt2img" or p.get("target") == "layer" else None
@@ -562,6 +593,8 @@ class Service:
                     self.state.message = "Cancelled - the image was left unchanged."
                 elif isinstance(err, NothingSelected):  # the core's message names GIMP's tools
                     self.state.message = REMOVE_SELECTION if p.get("remove") else NO_SELECTION
+                elif kind == "select" and isinstance(err, ValueError):
+                    self.state.message = str(err)
                 else:
                     self.state.message = describe_error(err)
         finally:
