@@ -269,6 +269,8 @@ class SettingsViews:
         """Keep the models list current, shown or not, so opening it shows it at once."""
         self.models.update_view(facts)
         self.engine.sync_source()
+        if hasattr(self.bar.service, "routes"):
+            self.generation.set_remote(self.bar.service.app_for(self.bar.tab.get()).settings.remote_fibo)
 
     # the settings ------------------------------------------------------------------------
 
@@ -776,23 +778,37 @@ class EngineView(tk.Frame):
             from openfill.sources import list_sources
 
             self.sources = {item["label"]: item["id"] for item in list_sources()}
-            ui.caption(self, "Run edits on").pack(anchor="w", pady=(12, 0))
-            self.source = ui.Select(self, CW, command=self.choose_source)
+            self.shared_engine = ui.frame(self)
+            self.shared_engine.pack(fill="x")
+            ui.caption(self.shared_engine, "Shared engine").pack(anchor="w", pady=(12, 0))
+            self.source = ui.Select(self.shared_engine, CW, command=self.choose_source)
             self.source.pack(anchor="w", pady=(8, 0))
-            self.source_url = ui.small(self, "")
+            self.source_url = ui.small(self.shared_engine, "")
             self.source_url.pack(anchor="w", pady=(8, 0))
-            self.sync_source()
             ui.small(
-                self,
-                "Start ComfyUI on the chosen computer. OpenFill connects to that source and lists its available Qwen, FIBO, and SDXL edit models.",
+                self.shared_engine,
+                "Select, Edit and Remove use this engine.",
             ).pack(fill="x", pady=(8, 0))
             row = ui.frame(self)
             row.pack(anchor="w", pady=(12, 0))
             ui.Button(row, "Check", self.check).pack(side="left")
             ui.Button(row, "Logs", self.logs).pack(side="left", padx=(8, 0))
             self.result = ui.small(self, "")
+        if hasattr(bar.service, "routes"):
+            from .engine_view import EngineAssignments
+
+            self.assignments = EngineAssignments(self, bar)
+            self.assignments.pack(fill="x", before=self.pack_slaves()[0])
+        self.sync_source()
 
     def sync_source(self) -> None:
+        if hasattr(self, "assignments"):
+            self.assignments.refresh()
+            if hasattr(self, "shared_engine"):
+                if self.bar.service.routes.enabled:
+                    self.shared_engine.pack_forget()
+                elif not self.shared_engine.winfo_manager():
+                    self.shared_engine.pack(fill="x", after=self.assignments)
         if not hasattr(self, "source"):
             return
         app = self.bar.service.app
@@ -835,6 +851,7 @@ class EngineView(tk.Frame):
 
     def check(self) -> None:
         bar = self.bar
+        mode = bar.tab.get()
         self.say(
             "Checking the selected ComfyUI source..."
             if bar.service.app.settings.remote_fibo
@@ -844,7 +861,7 @@ class EngineView(tk.Frame):
 
         def work() -> None:
             try:
-                health = bar.service.check_backend()
+                health = bar.service.check_backend(mode)
                 device = getattr(health, "device", "")
                 text = ("Working: " if health.ok else "Not working: ") + str(health.detail)
                 text += f" on {device}." if device else "."
@@ -873,35 +890,33 @@ class GenerationView(tk.Frame):
         self.fields: dict[str, ui.Field] = {}
         keys = (("steps", "cfg"), ("grow_percent", "feather_percent"))
         labels = {key: label for key, label, _kind in SETTINGS}
+        self.managed_controls = ui.frame(self)
         for pair in keys:
-            row = ui.frame(self)
+            row = ui.frame(self.managed_controls)
             row.pack(fill="x", pady=(12, 0))
             for i, key in enumerate(pair):
                 box, entry = field(row, labels[key], lambda b: ui.Field(b, half))
                 box.pack(side="left", padx=(12 if i else 0, 0))
                 self.fields[key] = entry
         ui.small(
-            self,
+            self.managed_controls,
             "Steps: more is slower and finer. Strictness: how closely the prompt is followed. "
             "Margin: how far past the selection the fill may repaint, as a share of its size.",
         ).pack(fill="x", pady=(12, 0))
         self.result = ui.small(self, "")
-        if bar.service.app.settings.remote_fibo:
-            for child in self.winfo_children():
-                child.pack_forget()
-            ui.small(
-                self,
-                "FIBO: describe the change; Turbo 4 steps / CFG 1, Dev 30 steps / CFG 5. SDXL: describe the desired selected content (for example, a blue ceramic teapot); 25 steps / CFG 6, DPM++ 2M/Karras, 75% change strength. Pixels outside the selection are preserved.",
-            ).pack(fill="x", pady=(12, 0))
-            ui.small(
-                self,
-                "Qwen Image 2.1: describe the change and what to keep. Lightning v2 RL uses its own four-step schedule.",
-            ).pack(fill="x", pady=(8, 0))
-            ui.small(
-                self,
-                "The PhotoCraft selection controls the visible edit. Auto-feather softens its edges inward without growing the selection.",
-            ).pack(fill="x", pady=(12, 0))
-            self.result = ui.small(self, "")
+        self.remote_controls = ui.frame(self)
+        ui.small(
+            self.remote_controls,
+            "FIBO: describe the change; Turbo 4 steps / CFG 1, Dev 30 steps / CFG 5. SDXL: describe the desired selected content (for example, a blue ceramic teapot); 25 steps / CFG 6, DPM++ 2M/Karras, 75% change strength. Pixels outside the selection are preserved.",
+        ).pack(fill="x", pady=(12, 0))
+        ui.small(
+            self.remote_controls,
+            "Qwen Image 2.1: describe the change and what to keep. Lightning v2 RL uses its own four-step schedule.",
+        ).pack(fill="x", pady=(8, 0))
+        ui.small(
+            self.remote_controls,
+            "The PhotoCraft selection controls the visible edit. Auto-feather softens its edges inward without growing the selection.",
+        ).pack(fill="x", pady=(12, 0))
         self.auto_feather = ui.Checkbox(self, "Auto-feather selection")
         self.auto_feather.pack(fill="x", pady=(12, 0))
         area_row = ui.frame(self)
@@ -941,6 +956,20 @@ class GenerationView(tk.Frame):
         self._build_fibo(bar.service.app.settings)
         self.apply_note = ui.small(self, "Applies when you generate.")
         self.apply_note.pack(fill="x", pady=(10, 0))
+        self._remote = None
+        self.set_remote(bar.service.app.settings.remote_fibo)
+
+    def set_remote(self, remote):
+        if self._remote == remote:
+            return
+        self._remote = remote
+        self.managed_controls.pack_forget()
+        self.remote_controls.pack_forget()
+        (self.remote_controls if remote else self.managed_controls).pack(fill="x", before=self.auto_feather)
+        if remote:
+            self.fibo_box.pack(fill="x", pady=(16, 0), before=self.apply_note)
+        else:
+            self.fibo_box.pack_forget()
 
     def watch_changes(self, changed) -> None:
         """Observe control edits after the stored settings have been loaded."""

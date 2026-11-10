@@ -25,6 +25,7 @@ from openfill.supervisor import process_name
 
 from .bridge import PCImage, PCLayer, PhotoCraftBridge
 from .control import ControlClient, ControlError
+from .engine_routes import EngineRoutes, mode_for
 from .references import ReferenceImages
 from .removal_advice import TEXTURE_REMOVAL, recommend
 from .selection import Selection, key_for
@@ -150,6 +151,8 @@ class Service:
         self.references = ReferenceImages()
         self.advice_sampler = SelectionSampler(client)
         self.selection = Selection(bridge)
+        self.routes = EngineRoutes(self.app, bridge.profile)
+        self._job_app = self.app
         self._switching = False
         self.watcher = None  # menu.Watcher, set by the launcher: keeps the document's facts current
         self.engine = ""  # "" not started by us, "starting", "ready", or why it failed
@@ -281,9 +284,10 @@ class Service:
             }
         result = self.advice_sampler.request(self.photocraft())
         if result["status"] == "ready":
-            existing = self.app.settings.remote_fibo
+            app = self.app_for("remove")
+            existing = app.settings.remote_fibo
             result.update(recommend(result.pop("features"), available, existing))
-            result["source"] = self.app.settings.fibo_source if existing else ""
+            result["source"] = app.settings.fibo_source if existing else ""
         return result
 
     def selection_preview(self, key):
@@ -296,6 +300,19 @@ class Service:
 
     def busy(self) -> bool:
         return getattr(self, "_switching", False) or (self._thread is not None and self._thread.is_alive())
+
+    def app_for(self, mode):
+        return self.routes.app_for(mode) if hasattr(self, "routes") else self.app
+
+    def configure_engines(self, enabled, routes):
+        if not self._operation_lock.acquire(blocking=False):
+            raise RuntimeError("OpenFill is reading the canvas or checking an engine. Try again in a moment.")
+        try:
+            if self.busy():
+                raise RuntimeError("Wait for the current job to finish before changing its engines.")
+            return self.routes.save(enabled, routes)
+        finally:
+            self._operation_lock.release()
 
     def select_source(self, source_id: str) -> dict[str, Any]:
         """Change destinations only between edits, including the connection check."""
@@ -319,14 +336,25 @@ class Service:
             self._switching = False
             self._operation_lock.release()
 
-    def check_backend(self):
+    def check_backend(self, mode="edit"):
         if not self._operation_lock.acquire(blocking=False):
             raise RuntimeError("A source change or connection check is already running.")
         try:
             if self.busy():
                 raise RuntimeError("Wait for the current edit to finish before checking its source.")
             self._switching = True
-            return self.app.check_backend()
+            app = self.app_for(mode)
+            if mode_for(mode) == "select":
+                from openfill.backend import HealthStatus
+
+                from .wevisone import encoder
+
+                try:
+                    client = self.selection.model._client(app, lambda *_: None, lambda: False)
+                    return HealthStatus(True, f"WeVisOne-VL is available: {encoder(client)}")
+                except Exception as err:
+                    return HealthStatus(False, str(err))
+            return app.check_backend()
         finally:
             self._switching = False
             self._operation_lock.release()
@@ -350,7 +378,11 @@ class Service:
     def _start(self, kind: str, params: dict[str, Any]) -> None:
         params = dict(params)
         removing = kind == "fill" and bool(params.get("remove"))
-        if self.app.settings.remote_fibo and kind != "select":
+        app = self.app_for(mode_for(kind, removing))
+        expected = params.pop("engineSource", None)
+        if expected is not None and expected != (app.settings.fibo_source if app.settings.remote_fibo else ""):
+            raise ValueError("The engine changed. Review the current mode and try again.")
+        if app.settings.remote_fibo and kind != "select":
             if kind != "fill":
                 raise RuntimeError("Choose Select, Edit, or Remove for this ComfyUI source.")
             if removing and params.get("removal", "default") in ("", "default", None):
@@ -363,16 +395,16 @@ class Service:
             if self.layers:
                 raise RuntimeError("Keep or discard the current choices before changing the selection.")
             self.selection.validate(params)
-            params = {k: params[k] for k in ("action", "key", "pixels", "query", "point", "operation") if k in params}
+            params = {
+                k: params[k] for k in ("action", "key", "pixels", "query", "point", "box", "operation") if k in params
+            }
         if removing and "adviceKey" in params:
             key = params["adviceKey"]
             if not key or live_selection_key(self.client) != key:
                 raise RuntimeError("The selection changed. Wait for the updated suggestion and press Remove again.")
             visible = []
             if params.get("removal") != TEXTURE_REMOVAL:
-                visible = [
-                    e.id for e in self.app.installed_models("remove") if e.id not in self.app.settings.hidden_models
-                ]
+                visible = [e.id for e in app.installed_models("remove") if e.id not in app.settings.hidden_models]
             fresh = self.removal_advice(visible)
             if (fresh.get("key"), fresh.get("method"), fresh.get("source")) != (
                 key,
@@ -388,7 +420,7 @@ class Service:
         # Freeze the image bytes and their order before the background worker starts.
         params["_reference_images"] = self.references.snapshot() if use_references else ()
         local_removal = removing and params.get("removal") == TEXTURE_REMOVAL
-        if removing and (local_removal or self.app.settings.remote_fibo):
+        if removing and (local_removal or app.settings.remote_fibo):
             params.pop("generation_settings", None)
         if removing and not 1 <= int(params.get("variations", 1)) <= 5:
             raise ValueError("Choose between one and five removal variations.")
@@ -421,6 +453,7 @@ class Service:
             self.state.committing = False
             self.state.preview, self.state.preview_seq = b"", self.state.preview_seq + 1
             self.state.preview_rect = None
+        self._job_app = app  # immutable destination for this job, including any cancellation
         self._thread = threading.Thread(target=self._job, args=(kind, params), name="openfill-job", daemon=True)
         self._thread.start()
 
@@ -436,25 +469,33 @@ class Service:
             return
         if local_removal or selecting:
             return  # The scratch fill checks cancellation before the result reaches the document.
-        if self.app.settings.remote_fibo:
-            backend = getattr(self.app, "_active_backend", None)
+        app = getattr(self, "_job_app", self.app)
+        if app.settings.remote_fibo:
+            backend = getattr(app, "_active_backend", None)
             if backend is not None:
                 backend.cancel()
             return  # never interrupt another backend user or clear its shared queue
         try:
-            self.app.server.request_cancel()
+            app.server.request_cancel()
         except Exception:  # noqa: BLE001
             pass
         try:
             from openfill.comfy_api import ComfyClient
 
-            ComfyClient(self.app.server.url(), timeout=3).interrupt()
+            ComfyClient(app.server.url(), timeout=3).interrupt()
         except Exception:  # noqa: BLE001
             pass
 
     def _job(self, kind: str, p: dict[str, Any]) -> None:
         image = None
-        if kind != "select" and not self.state.local_removal and self._warm is not None and self._warm.is_alive():
+        app = getattr(self, "_job_app", self.app)
+        if (
+            app is self.app
+            and kind != "select"
+            and not self.state.local_removal
+            and self._warm is not None
+            and self._warm.is_alive()
+        ):
             with self.state.lock:
                 self.state.text = "Starting the AI engine (the first time takes about a minute)..."
             self._warm.join()  # one start of ComfyUI, not two
@@ -465,9 +506,7 @@ class Service:
                     with self.state.lock:
                         self.state.fraction, self.state.text = fraction, message
 
-                message = self.selection.run(
-                    self.app, p, progress, lambda: self.state.cancel_requested, self._begin_commit
-                )
+                message = self.selection.run(app, p, progress, lambda: self.state.cancel_requested, self._begin_commit)
                 with self.state.lock:
                     self.state.state, self.state.fraction = "done", 1.0
                     self.state.text = self.state.message = message
@@ -511,21 +550,19 @@ class Service:
                         )
             elif kind == "fill":
                 references = p.get("_reference_images", ())
-                layers = self.app.generative_fill(
+                layers = app.generative_fill(
                     image,
                     str(p.get("prompt", "")),
                     str(p.get("negative", "")),
                     variations,
-                    None
-                    if self.app.settings.remote_fibo and p.get("strength") is None
-                    else float(p.get("strength", 1.0)),
+                    None if app.settings.remote_fibo and p.get("strength") is None else float(p.get("strength", 1.0)),
                     seed,
                     model,
                     remove=bool(p.get("remove")),
                     **({"reference_images": references} if references else {}),
                 )
             elif kind == "expand":
-                layers = self.app.generative_expand(
+                layers = app.generative_expand(
                     image,
                     str(p.get("prompt", "")),
                     str(p.get("negative", "")),
@@ -538,7 +575,7 @@ class Service:
                     model,
                 )
             elif kind == "txt2img":
-                self.app.text_to_image(
+                app.text_to_image(
                     image,
                     str(p.get("prompt", "")),
                     str(p.get("negative", "")),
@@ -617,9 +654,10 @@ class Service:
 
     def _remove(self, image: PCImage, p: dict[str, Any], seed: int, variations: int) -> list:
         """Stage texture or model-based removal through the usual variation and commit path."""
+        app = getattr(self, "_job_app", self.app)
         how = str(p.get("removal") or "default")
         if how == TEXTURE_REMOVAL:
-            runner = WebRunner(self.app, "Object Removal", TEXTURE_LABEL)
+            runner = WebRunner(app, "Object Removal", TEXTURE_LABEL)
             layers = runner.run(
                 lambda progress, _preview, cancel: self.bridge.remove_with_texture(
                     image, variations, seed, progress, cancel
@@ -630,9 +668,7 @@ class Service:
         if how.startswith("refine:") or how == "default":
             how = "active"
         how = self.OLD_REMOVALS.get(how, how)
-        layers = self.app.generative_fill(
-            image, "", "", variations, 1.0, seed, how, remove=True, as_picked=how != "active"
-        )
+        layers = app.generative_fill(image, "", "", variations, 1.0, seed, how, remove=True, as_picked=how != "active")
         for index, layer in enumerate(layers):
             layer.name = "Object Removal" if len(layers) == 1 else f"Object Removal ({index + 1})"
         if image.pending_group:

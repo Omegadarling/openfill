@@ -164,6 +164,8 @@ class Refresher:
 
     def __init__(self, service: Service, cache: Path | None = None) -> None:
         self.service = service
+        self.mode = "edit"
+        self.inventories = {}
         self.cache = cache
         source = service.app.settings.fibo_source if service.app.settings.remote_fibo else None
         self.facts: dict[str, Any] = self._load_cache(source)
@@ -212,40 +214,54 @@ class Refresher:
 
     def get(self) -> dict[str, Any]:
         with self.lock:
-            app = self.service.app
-            if app.settings.remote_fibo and self.facts.get("source") != app.settings.fibo_source:
+            app = self.service.app_for(self.mode)
+            key = (self.mode, app.settings.fibo_source if app.settings.remote_fibo else "")
+            if key in self.inventories:
+                return dict(self.inventories[key])
+            if self.mode == "select":
+                return {"comfy_ok": True, "source": key[1], "models": {}, "rows": [], "hardware": "WeVisOne-VL"}
+            if self.facts.get("source", "") != key[1]:
                 return {
-                    "comfy_ok": True,
-                    "source": app.settings.fibo_source,
+                    "comfy_ok": app.settings.remote_fibo,
+                    "source": key[1],
                     "models": {},
                     "rows": [],
-                    "hardware": f"{app.source_label()} · ComfyUI",
+                    "hardware": f"{app.source_label()} · ComfyUI" if app.settings.remote_fibo else "",
                 }
             return dict(self.facts)
 
     def _loop(self) -> None:
         while True:
-            source = self.service.app.settings.fibo_source
+            mode = self.mode
+            app = self.service.app_for(mode)
+            source = app.settings.fibo_source if app.settings.remote_fibo else ""
             try:
-                facts = self.look()
+                facts = (
+                    self.look(app)
+                    if mode != "select"
+                    else {"comfy_ok": True, "models": {}, "rows": [], "hardware": "WeVisOne-VL"}
+                )
             except Exception as err:  # noqa: BLE001 - shown on the panel
                 facts = {"error": str(err)}
-                if self.service.app.settings.remote_fibo:
+                if app.settings.remote_fibo:
                     facts.update(comfy_ok=False, comfy_problem=str(err), remote=True)
-            if source != self.service.app.settings.fibo_source:
+            if app is not self.service.app_for(mode) or source != (
+                app.settings.fibo_source if app.settings.remote_fibo else ""
+            ):
                 continue  # a reply from the former source cannot repaint the new source's UI
             facts["source"] = source
             with self.lock:
                 self.facts = facts
+                self.inventories[mode, source] = facts
             self._save_cache(facts)
             self.wake.wait(4.0)
             self.wake.clear()
 
-    def look(self) -> dict[str, Any]:
+    def look(self, app=None) -> dict[str, Any]:
         from openfill import catalog as cat
         from openfill.config import comfy_layout, comfy_problem
 
-        app = self.service.app
+        app = app or self.service.app_for(self.mode)
         comfy_ok = app.settings.remote_fibo or comfy_layout(app.settings.comfy_dir) is not None
         facts: dict[str, Any] = {
             "comfy_ok": comfy_ok,
@@ -256,7 +272,7 @@ class Refresher:
                 try:
                     facts["setup"] = self.service.setup_progress()
                     if facts["setup"] is None and comfy_layout(app.settings.comfy_dir) is not None:
-                        return self.look()  # the download just finished: ComfyUI is there now
+                        return self.look(app)  # the download just finished: ComfyUI is there now
                     if self._preflight is None:
                         self._preflight = self.service.comfy_preflight()
                     facts["preflight"] = self._preflight
@@ -999,7 +1015,9 @@ class Bar:
             self._select_tab(key)
 
     def _select_tab(self, key: str) -> None:
-        if self.service.app.settings.remote_fibo and key not in ("select", "fill", "remove"):
+        from .engine_routes import mode_for
+
+        if self.service.app_for(key).settings.remote_fibo and key not in ("select", "fill", "remove"):
             key = "fill"
         self.model_box.close()
         if key != self.tab.get():
@@ -1007,6 +1025,8 @@ class Bar:
             self._note = None
             self.model_choice.set("")
         self.tab.set(key)
+        self.refresher.mode = mode_for(key)
+        self.refresher.wake.set()
         self.model_label.set("Method" if key == "remove" else "Model")
         self.modes.set("fill" if key in ("expand", "txt2img") else key)
         self.edit_tools.set(key if key in dict(EDIT_TOOLS) else "fill")
@@ -1015,7 +1035,7 @@ class Bar:
         if key in PLACEHOLDERS:
             self.prompt.set_placeholder(
                 "Qwen and FIBO: describe the change. SDXL: describe what should appear in the selection. Select All to edit the whole image."
-                if self.service.app.settings.remote_fibo
+                if self.service.app_for(key).settings.remote_fibo
                 else PLACEHOLDERS[key]
             )
         self.go.set(label=GO[key])
@@ -1031,7 +1051,7 @@ class Bar:
         parts: list[tk.Misc] = [self.modes, self.context_row]
         if key == "select":
             parts.append(self.select_view_panel)
-        if not self.service.app.settings.remote_fibo and key in dict(EDIT_TOOLS):
+        if not self.service.app_for(key).settings.remote_fibo and key in dict(EDIT_TOOLS):
             parts.insert(1, self.edit_tools)
         if key == "remove":
             parts.extend((self.remove_scene_row, self.remove_line))
@@ -1147,9 +1167,10 @@ class Bar:
         available = facts.get("models") or {}
         edit_models = {i for i, _n in available.get(self.tab.get(), [])}
         if model_id and model_id != facts.get("active") and model_id in edit_models:
+            target_app = self.service.app_for(self.tab.get())
 
             def activate() -> None:
-                self.service.app.set_active(model_id)
+                target_app.set_active(model_id)
                 self.refresher.wake.set()
 
             threading.Thread(target=self._safe, args=(activate,), daemon=True).start()
@@ -1162,7 +1183,7 @@ class Bar:
             self.select_view_panel.submit("describe")
             return
         independent_removal = kind == "remove" and (
-            self.service.app.settings.remote_fibo or self._model() == TEXTURE_REMOVAL
+            self.service.app_for(kind).settings.remote_fibo or self._model() == TEXTURE_REMOVAL
         )
         generation_options = {} if independent_removal else self.settings_view.generation_options()
         if generation_options is None:
@@ -1179,7 +1200,10 @@ class Bar:
                 body.update(
                     prompt="" if kind == "remove" else prompt, remove=kind == "remove", strength=1.0, negative=""
                 )
-                if self.service.app.settings.remote_fibo:
+                current_facts = self.refresher.get()
+                if "source" in current_facts:
+                    body["engineSource"] = current_facts["source"]
+                if self.service.app_for(kind).settings.remote_fibo:
                     body.pop("strength")  # Let the selected edit model choose its tested default.
                 if (
                     kind == "fill"
@@ -1334,13 +1358,13 @@ class Bar:
         }
         shown_facts = {**facts, "models": models}
         if tab == "remove":
-            choices = removal_choices(shown_facts, existing_server=self.service.app.settings.remote_fibo)
+            choices = removal_choices(shown_facts, existing_server=self.service.app_for(tab).settings.remote_fibo)
             wanted = self.prefs.get("removal", "")
             if wanted == "Local removal (automatic)":
                 wanted = TEXTURE_LABEL
         else:
             choices = (
-                fill_choices(shown_facts, existing_server=self.service.app.settings.remote_fibo)
+                fill_choices(shown_facts, existing_server=self.service.app_for(tab).settings.remote_fibo)
                 if tab == "fill"
                 else {name: i for i, name in models.get(tab, [])}
             )
@@ -1369,7 +1393,7 @@ class Bar:
         if tab == "remove":
             available = [i for i, _ in models.get("remove", [])]
             self.scene_choices = {
-                r["scene"]: r for r in removal_scenes(available, self.service.app.settings.remote_fibo)
+                r["scene"]: r for r in removal_scenes(available, self.service.app_for(tab).settings.remote_fibo)
             }
             values = [AUTO, SCENE_PLACEHOLDER, *self.scene_choices]
             if self.remove_scene_box.values != values:
@@ -1381,7 +1405,11 @@ class Bar:
             if self.remove_scene == AUTO:
                 if self.collapsed:
                     self._advice = {}
-                elif self.service.app.settings.remote_fibo and facts.get("comfy_ok", True) and "active" not in facts:
+                elif (
+                    self.service.app_for(tab).settings.remote_fibo
+                    and facts.get("comfy_ok", True)
+                    and "active" not in facts
+                ):
                     self._advice = {"status": "loading", "tip": "Checking available removal methods…"}
                 else:
                     self._advice = self.service.removal_advice(available)
@@ -1555,8 +1583,9 @@ class Bar:
         pre = facts.get("preflight") or {}
         if self.tab.get() == "remove" and self._model() == TEXTURE_REMOVAL:
             pass  # Nearby texture runs inside PhotoCraft, including when ComfyUI is offline.
-        elif self.service.app.settings.remote_fibo and facts.get("error"):
-            key = ("remote", "warn", WARN, f"{self.service.app.source_label()} is unavailable", str(facts["error"]), ())
+        elif self.service.app_for(self.tab.get()).settings.remote_fibo and facts.get("error"):
+            label = self.service.app_for(self.tab.get()).source_label()
+            key = ("remote", "warn", WARN, f"{label} is unavailable", str(facts["error"]), ())
         elif facts and not facts.get("comfy_ok", True) and setup and "error" not in setup:
             key = (
                 "setup",

@@ -5,6 +5,11 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-11-10
+
+- Drag a box in the Select preview to isolate a small or overlapping object using its actual outline. The picker can inspect the original pixels inside the box on large images. Click, Add, Subtract and Undo work with the same selection.
+- All modes use one engine by default. Enable Multi-engine under Engine to assign a server to Select, Edit and Remove. Mode changes preserve server sessions, model inventories and the active edit model on additional servers.
+
 ## [0.17.0] - 2026-11-10
 
 - The native and browser panels now have three top-level modes: **Select**, **Edit**, and **Remove**. In managed mode, Fill, Expand, and Create are available under Edit.

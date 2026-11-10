@@ -64,8 +64,10 @@ class Api:
 
     # GET ------------------------------------------------------------------------------
 
-    def state(self) -> dict[str, Any]:
-        app = self.service.app
+    def state(self, mode="edit") -> dict[str, Any]:
+        app = self.service.app_for(mode) if hasattr(self.service, "routes") else self.service.app
+        selecting = mode == "select"
+        ready = selecting or _comfy_set(app)
         return {
             "version": __version__,
             "job": self.service.state.snapshot(),
@@ -75,18 +77,23 @@ class Api:
             "backendUrl": app.settings.url if app.settings.remote_fibo else "",
             "backendSource": app.settings.fibo_source if app.settings.remote_fibo else "",
             "backendName": app.source_label() if app.settings.remote_fibo else "",
-            "activeModel": app.active_model_id(),
-            "comfyReady": _comfy_set(app),
-            "comfyProblem": "" if _comfy_set(app) else _comfy_problem(app),
-            "setup": None if _comfy_set(app) else self.service.setup_progress(),
+            "sharedRemote": self.service.app.settings.remote_fibo,
+            "sharedSource": self.service.app.settings.fibo_source,
+            "engineRouting": self.service.routes.describe() if hasattr(self.service, "routes") else None,
+            "activeModel": "" if selecting else app.active_model_id(),
+            "comfyReady": ready,
+            "comfyProblem": "" if ready else _comfy_problem(app),
+            "setup": None if ready else self.service.setup_progress(),
             "pick": self._pick,
         }
 
-    def models(self) -> dict[str, Any]:
+    def models(self, mode="edit") -> dict[str, Any]:
         from .removal_advice import removal_scenes
 
-        app = self.service.app
+        app = self.service.app_for(mode) if hasattr(self.service, "routes") else self.service.app
         source_id = app.settings.fibo_source if app.settings.remote_fibo else ""
+        if mode == "select":
+            return {"rows": [], "removalScenes": [], "source": source_id, "hardware": "WeVisOne-VL"}
         try:
             rows = app.model_rows(app.server_model_files())
         except Exception as err:  # noqa: BLE001
@@ -117,8 +124,6 @@ class Api:
             if not row["runnable"]:
                 row["neededBy"] = needed_by(list(app.catalog), row["id"])
         if app.settings.remote_fibo:
-            from openfill.sources import get_source
-
             if source_id != app.settings.fibo_source:
                 rows, source_id = [], app.settings.fibo_source
                 scenes = removal_scenes([], True)
@@ -128,7 +133,7 @@ class Api:
                 "current": current,
                 "pending": pending,
                 "source": source_id,
-                "hardware": f"{get_source(source_id).label} · ComfyUI",
+                "hardware": f"{app.source_label()} · ComfyUI",
             }
         hw = None
         try:
@@ -221,7 +226,12 @@ class Api:
         if path == "/api/models/download":
             return {"tasks": app.queue_download(str(body["id"]))}
         if path == "/api/models/activate":
-            entry = app.set_active(str(body["id"]))
+            target = svc.app_for(body.get("mode", "edit")) if hasattr(svc, "routes") else app
+            if "source" in body and body["source"] != (
+                target.settings.fibo_source if target.settings.remote_fibo else ""
+            ):
+                raise ValueError("The engine changed. Choose the model again.")
+            entry = target.set_active(str(body["id"]))
             return {"active": entry.id}
         if path == "/api/models/visibility":
             model_id, visible = body.get("id"), body.get("visible")
@@ -285,10 +295,12 @@ class Api:
         if path == "/api/comfy/setup":
             return {"task": svc.setup_comfy()}
         if path == "/api/backend/check":
-            health = svc.check_backend()
+            health = svc.check_backend(body["mode"]) if "mode" in body else svc.check_backend()
             return {"ok": health.ok, "detail": health.detail, "device": getattr(health, "device", "")}
         if path == "/api/backend/source":
             return svc.select_source(str(body["source"]))
+        if path == "/api/backend/routing":
+            return svc.configure_engines(body.get("enabled"), body.get("routes"))
         if path == "/api/backend/stop":
             return {"message": app.stop_backend()}
         if path == "/api/logs":
@@ -348,9 +360,11 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
                 elif path == "/api/ping":
                     self._json(200, {"ok": True, "version": __version__})
                 elif path == "/api/state":
-                    self._json(200, api.state())
+                    modes = parse_qs(urlparse(self.path).query).get("mode")
+                    self._json(200, api.state(modes[0]) if modes else api.state())
                 elif path == "/api/models":
-                    self._json(200, api.models())
+                    modes = parse_qs(urlparse(self.path).query).get("mode")
+                    self._json(200, api.models(modes[0]) if modes else api.models())
                 elif path == "/api/sources":
                     self._json(200, api.sources())
                 elif path == "/api/settings":

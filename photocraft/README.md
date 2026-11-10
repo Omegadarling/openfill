@@ -8,13 +8,19 @@ The standard tools share the engine from [upstream OpenFill](https://github.com/
 
 ## Select an object
 
-Open **Filter → Plug-ins → OpenFill**, then choose **Select**. Click inside an object in the panel's preview. Blue shows the selection. For a small or ambiguous target, type a description such as **the teaspoon beside the cup** and press **Select by description**. A description selects all matching instances; clicking with a description picks one under the pointer.
+Open **Filter → Plug-ins → OpenFill**, then choose **Select**. Click inside an object in the panel preview, or drag a tight box around a small or overlapping object. Release to select its outline. Escape cancels the drag. Blue shows the selection. You can also enter **the teaspoon beside the cup** and press **Select by description**. A description can narrow a click or a box to the part you want.
 
 Use **Add** to include another object or **Subtract** to take one out. Set **Grow selection** to the number of document pixels to expand (1–64, initially 4), then press **Grow**. Press it again for another expansion. Grow also works with a PhotoCraft lasso or marquee, even without ComfyUI. Each operation has its own Undo step. Switch straight to **Edit** or **Remove** to use the selection.
 
 **AI setup:** use a ComfyUI build with the built-in [WeVisOne-VL Detect node](https://github.com/Comfy-Org/ComfyUI/pull/17632). Put one of the [Comfy-Org WeVisOne-VL encoders](https://huggingface.co/Comfy-Org/WeVisOne-VL/tree/135355350443103e34089dd39264fe0651691929/text_encoders) in that server's `models/text_encoders` folder. Use the ComfyUI conversion, which includes the mask decoder. The 4B BF16 file is 9.7 GB; 2B and INT8 files are also supported. OpenFill discovers the file by its loader name. These weights are optional and are not part of the OpenFill download.
 
-Selection normally uses the configured ComfyUI server. For a separate local GPU engine, an optional `selection-engine.json` in the companion profile can specify `port`, absolute paths to `python`, `comfy_dir` (contains `main.py`) and `data_dir` (contains `models`), plus an optional `cuda_device` index. OpenFill starts this loopback engine on the first AI selection; Grow does not start it. This does not change the source used by Edit or Remove.
+## Use a different engine for each mode
+
+By default **Select**, **Edit** and **Remove** share the configured engine. Open **Engine**, check **Multi-engine**, and choose a ComfyUI server for each mode. Choose **Other ComfyUI URL…** to enter another server address or a local forwarded port. Two modes can share a server. Assignments save immediately and are remembered when you turn Multi-engine back on. **Check** tests the engine for the current mode.
+
+Start the selected ComfyUI servers and install each model on the server assigned to its mode. After the first use, switching tabs leaves the servers running so ComfyUI can reuse loaded models as its GPU memory permits. Separate GPUs give each mode its own memory. Grow and Local removal run inside PhotoCraft.
+
+An existing `selection-engine.json` adds **Local WeVisOne** to the Select picker. It specifies `port`, absolute paths to `python`, `comfy_dir` (contains `main.py`) and `data_dir` (contains `models`), and an optional `cuda_device` index. Choosing this helper in Multi-engine starts it on demand. When Multi-engine is off, Select uses the shared server even if this file exists.
 
 ## Edit with an existing ComfyUI
 

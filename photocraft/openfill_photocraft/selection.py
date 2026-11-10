@@ -56,10 +56,10 @@ class Selection:
         image = PCImage(self.bridge, doc["name"], index)
         full, mask = self.bridge._snapshot(image)
         active(client, key)
-        rgba = full.copy()
-        rgba.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
-        source = Image.new("RGB", rgba.size, (112, 112, 112))
-        source.paste(rgba, mask=rgba.getchannel("A"))
+        # Keep the original pixels so a box around a small object on a large canvas
+        # can be framed at full detail. Only the display and model inputs are reduced.
+        source = Image.new("RGB", full.size, (112, 112, 112))
+        source.paste(full, mask=full.getchannel("A"))
         thumb = source.copy()
         thumb.thumbnail((720, 500), Image.Resampling.LANCZOS)
         if mask is not None:
@@ -86,7 +86,7 @@ class Selection:
             if type(pixels) is not int or not 1 <= pixels <= 64:
                 raise ValueError("Choose a grow distance from 1 to 64 pixels.")
             return
-        if action not in ("click", "describe") or params.get("operation", "replace") not in OPERATIONS:
+        if action not in ("click", "box", "describe") or params.get("operation", "replace") not in OPERATIONS:
             raise ValueError("Choose a valid selection action.")
         if self.key != params.get("key") or self.source is None:
             raise ValueError(STALE)
@@ -101,6 +101,16 @@ class Selection:
                 or not all(type(p) in (int, float) and math.isfinite(p) and 0 <= p < 1 for p in point)
             ):
                 raise ValueError("Click inside the image preview.")
+        if action == "box":
+            box = params.get("box")
+            if (
+                not isinstance(box, (list, tuple))
+                or len(box) != 4
+                or not all(type(p) in (int, float) and 0 <= p <= 1 for p in box)
+                or box[0] == box[2]
+                or box[1] == box[3]
+            ):
+                raise ValueError("Drag a box around the object in the image preview.")
         if params.get("operation") == "subtract" and not doc.get("hasSelection"):
             raise ValueError("Make a selection before subtracting from it.")
 
@@ -121,6 +131,7 @@ class Selection:
             params.get("point") if action == "click" else None,
             progress,
             cancel,
+            box=params["box"] if action == "box" else None,
         )
         index, doc = active(client, key)
         size = (doc["width"], doc["height"])

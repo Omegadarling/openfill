@@ -7,6 +7,7 @@ import atexit
 import hashlib
 import io
 import json
+import math
 import re
 import subprocess
 import time
@@ -76,9 +77,60 @@ def choose_matte(masks, point):
         if point is not None:
             raise ValueError("No object found at that point. Click inside it or describe what to select.")
         raise ValueError("No matching object found. Try a more specific description.")
+    return clean_matte(best)
+
+
+def clean_matte(mask):
     # Suppress barely visible distant specks that otherwise enlarge PhotoCraft's
     # selection bounds; make opaque cores fully editable. Preserve the soft edge.
-    return best.point(lambda alpha: 0 if alpha < 6 else 255 if alpha >= 250 else alpha)
+    return mask.point(lambda alpha: 0 if alpha < 6 else 255 if alpha >= 250 else alpha)
+
+
+def box_pixels(size, box):
+    """Map normalized drag endpoints to a nonempty Pillow box (exclusive right/bottom)."""
+    x1, x2 = sorted((box[0], box[2]))
+    y1, y2 = sorted((box[1], box[3]))
+    return math.floor(x1 * size[0]), math.floor(y1 * size[1]), math.ceil(x2 * size[0]), math.ceil(y2 * size[1])
+
+
+def choose_box_matte(masks, rect, cut_edges=(False, False, False, False)):
+    """Match a box around an object to its whole matte, including holes and soft edges."""
+    left, top, right, bottom = rect
+    box_area = (right - left) * (bottom - top)
+    best = None
+    best_score = 0
+    for mask in masks:
+        peak = mask.getextrema()[1]
+        if peak < 8:
+            continue
+        threshold = max(8, round(peak * 0.5))
+        core = mask.point([0] * threshold + [255] * (256 - threshold))
+        x1, y1, x2, y2 = core.getbbox()
+        # A matte cut off by the temporary crop needs a second look on the full image.
+        touches = (x1 == 0, y1 == 0, x2 == mask.width, y2 == mask.height)
+        if any(cut and touched for cut, touched in zip(cut_edges, touches, strict=True)):
+            continue
+        area = core.histogram()[255]
+        inside = core.crop(rect).histogram()[255]
+        if inside < area * 0.5:
+            continue
+        # Favor a tightly enclosed instance over a larger subject behind it. Use the
+        # silhouette's bounds for fit so thin wires and hollow handles are eligible.
+        overlap = (min(right, x2) - max(left, x1)) * (min(bottom, y2) - max(top, y1))
+        union = box_area + (x2 - x1) * (y2 - y1) - overlap
+        score = (inside / area) * (overlap / union)
+        if score > best_score:
+            best, best_score = mask, score
+    return clean_matte(best) if best is not None else None
+
+
+def model_frame(image):
+    """Limit full-frame inference without losing original pixels for a smaller box."""
+    if max(image.size) <= 1536:
+        return image
+    frame = image.copy()
+    frame.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
+    return frame
 
 
 class WeVisOne:
@@ -98,7 +150,7 @@ class WeVisOne:
                 self.process.kill()
 
     def _client(self, app, progress, cancel):
-        if not self.config.is_file():
+        if not getattr(app, "selection_helper", False):
             if app.settings.backend == "a1111":
                 raise ValueError("Choose a ComfyUI engine to select objects with WeVisOne-VL.")
             url = app.server.ensure_running(progress, cancel)
@@ -152,18 +204,55 @@ class WeVisOne:
             "The local selection engine could not start. See selection-engine.log in the OpenFill profile."
         )
 
-    def mask(self, app, source, query, point, progress, cancel):
+    def mask(self, app, source, query, point, progress, cancel, *, box=None):
         client = self._client(app, progress, cancel)
         name = encoder(client)
+        if box is None:
+            masks = self._instances(client, name, model_frame(source), query, progress, cancel)
+            return choose_matte(masks, point)
+
+        # Keep surrounding context. For a small item this crop uses the original document
+        # pixels, before the full image would be reduced to the model's input limit.
+        width, height = source.size
+        left, top, right, bottom = box_pixels(source.size, box)
+        pad = max(16, math.ceil(max(right - left, bottom - top) / 2))
+        x1, y1, x2, y2 = max(0, left - pad), max(0, top - pad), min(width, right + pad), min(height, bottom + pad)
+        crop_size = x2 - x1, y2 - y1
+        if crop_size[0] * crop_size[1] < 0.75 * width * height:
+            frame = model_frame(source.crop((x1, y1, x2, y2)))
+            crop_box = (
+                (left - x1) / crop_size[0],
+                (top - y1) / crop_size[1],
+                (right - x1) / crop_size[0],
+                (bottom - y1) / crop_size[1],
+            )
+            masks = self._instances(client, name, frame, query, progress, cancel, cache=False)
+            matte = choose_box_matte(masks, box_pixels(frame.size, crop_box), (x1 > 0, y1 > 0, x2 < width, y2 < height))
+            if matte is not None:
+                if matte.size != crop_size:
+                    matte = matte.resize(crop_size, Image.Resampling.BILINEAR)
+                result = Image.new("L", source.size)
+                result.paste(matte, (x1, y1))
+                return result
+            progress(0.1, "Checking the full image for the boxed object…")
+
+        frame = model_frame(source)
+        masks = self._instances(client, name, frame, query, progress, cancel)
+        matte = choose_box_matte(masks, box_pixels(frame.size, box))
+        if matte is None:
+            raise ValueError("No object found in that box. Draw a box around the whole object or describe it.")
+        return matte
+
+    def _instances(self, client, name, source, query, progress, cancel, *, cache=True):
+        if cancel():
+            raise GenerationCancelled("Selection cancelled.")
         stream = io.BytesIO()
         source.save(stream, "PNG", compress_level=1)
         data = stream.getvalue()
         digest = hashlib.sha256(data).hexdigest()
         key = (client.base_url, name, digest, query)
         if key == self.cache_key:
-            return choose_matte(self.cached_masks, point)
-        if cancel():
-            raise GenerationCancelled("Selection cancelled.")
+            return self.cached_masks
         path = client.upload_image(f"{digest}.png", data, subfolder="openfill/selection")
         prompt_id = client.queue_prompt(workflow(name, path, query))
         history = client.wait_for(
@@ -188,6 +277,6 @@ class WeVisOne:
                     raise ValueError("The selection mask does not match the image dimensions.")
                 masks.append(image.convert("L"))
         # Bound retained masks. Repeated clicks on the same composite normally need no GPU pass.
-        if source.width * source.height * len(masks) <= 48 * 1024 * 1024:
+        if cache and source.width * source.height * len(masks) <= 48 * 1024 * 1024:
             self.cache_key, self.cached_masks = key, masks
-        return choose_matte(masks, point)
+        return masks

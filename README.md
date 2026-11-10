@@ -19,7 +19,7 @@ This fork extends [Beckett Harriman’s OpenFill](https://github.com/beckettharr
 ## What this fork adds
 
 - **Remove without a prompt.** Select the object and its shadow and open **Remove**. **Suggest for** picks a method for the scene, or choose **Method** yourself. Start with Local for a smooth backdrop, LaMa for wires and repeated detail, RORem for reflective objects, or Qwen Image 2.1 Lightning for hidden shapes. The panel lists methods available on your selected source. Choose 1–5 variations to compare repairs on the canvas.
-- **Select → Edit → Remove.** Click an object in the Select preview or describe it to WeVisOne-VL. Add or subtract objects, or grow any PhotoCraft selection by a few pixels per click. [Selection setup and examples](photocraft/README.md#select-an-object).
+- **Select → Edit → Remove.** Click an object, drag a box around it, or describe it to WeVisOne-VL. Add, subtract or grow the selection. All three modes share one engine by default. Enable **Multi-engine** to assign a ComfyUI server to each mode. [Select and engine setup](photocraft/README.md#select-an-object).
 - **Edit** with full Qwen Image 2.1 BF16, four-step Qwen Image 2.1 Lightning v2 RL, and compatible FIBO 2.0 Edit Turbo and Dev NVFP4 checkpoints on an existing ComfyUI server.
 - **Multiple reference images** for Qwen 2.1 and FIBO 2.0. Add and reorder references, then use their labels in the prompt. Drag image files in from Explorer on Windows or drop them into the browser panel.
 - **Automatic feathering** softens the mask inward so an edit blends into the original along the selection edge.

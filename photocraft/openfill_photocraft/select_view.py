@@ -21,17 +21,24 @@ class SelectView(tk.Frame):
         self.key = self.loading = ""
         self.retry_at = 0.0
         self.photo, self.rect = None, None
+        self.drag_start = None
+        self.dragged = False
         self.operation = "replace"
         self.query = tk.StringVar()
         self.radius = tk.IntVar(value=4)
-        ui.small(self, "WeVisOne-VL · Click an object or describe it. Blue shows the current selection.").pack(
-            anchor="w"
-        )
+        ui.small(
+            self,
+            "WeVisOne-VL · Click an object, drag a box around it, or describe it. Blue shows the current selection.",
+        ).pack(anchor="w")
         self.canvas = tk.Canvas(
             self, bg=ui.WELL, width=ui.CW, height=184, bd=0, highlightthickness=0, cursor="crosshair"
         )
         self.canvas.pack(anchor="w", pady=(6, 8))
-        self.canvas.bind("<Button-1>", self._click)
+        self.canvas.bind("<ButtonPress-1>", self._press)
+        self.canvas.bind("<B1-Motion>", self._drag)
+        self.canvas.bind("<ButtonRelease-1>", self._release)
+        self.canvas.bind("<Escape>", self._cancel_drag)
+        self.canvas.bind("<Unmap>", self._cancel_drag)
         self.ops = ui.Seg(
             self, (("replace", "Replace"), ("add", "Add"), ("subtract", "Subtract")), self._operation, ui.CW, 12
         )
@@ -93,6 +100,7 @@ class SelectView(tk.Frame):
         key = pc.get("documentKey") or ""
         blocked = bool(self.bar.service.layers)
         if self.key != key or blocked:
+            self._cancel_drag()
             self.key, self.rect = "", None
             self.canvas.delete("all")
         if not self.key:
@@ -143,21 +151,70 @@ class SelectView(tk.Frame):
         self.key = key
         self.buttons()
 
-    def _click(self, event):
-        if self.rect:
-            left, top, width, height = self.rect
-            x, y = (event.x - left) / width, (event.y - top) / height
-            if 0 <= x < 1 and 0 <= y < 1:
-                self.submit("click", [x, y])
+    def _point(self, event):
+        if self.rect is None:
+            return None
+        left, top, width, height = self.rect
+        point = [(event.x - left) / width, (event.y - top) / height]
+        return point if all(0 <= p < 1 for p in point) else None
 
-    def submit(self, action, point=None):
+    def _click(self, event):
+        point = self._point(event)
+        if point is not None:
+            self.submit("click", point)
+
+    def _press(self, event):
+        self._cancel_drag()
+        if self.key and not self.bar.service.busy() and self._point(event) is not None:
+            self.canvas.focus_set()
+            self.drag_start = (event.x, event.y)
+
+    def _drag(self, event):
+        if self.drag_start is None or self.rect is None:
+            return None
+        x, y = self.drag_start
+        if not self.dragged and max(abs(event.x - x), abs(event.y - y)) < 4:
+            return None
+        self.dragged = True
+        left, top, width, height = self.rect
+        end_x = max(left, min(left + width, event.x))
+        end_y = max(top, min(top + height, event.y))
+        x1, x2 = sorted((x, end_x))
+        y1, y2 = sorted((y, end_y))
+        self.canvas.delete("drag-box")
+        self.canvas.create_rectangle(x1, y1, x2, y2, tags="drag-box", outline=ui.ACCENT, width=2, dash=(4, 2))
+        if x1 == x2 or y1 == y2:
+            return None
+        return [(x1 - left) / width, (y1 - top) / height, (x2 - left) / width, (y2 - top) / height]
+
+    def _release(self, event):
+        if self.drag_start is None:
+            return
+        box = self._drag(event)
+        dragged = self.dragged
+        self._cancel_drag()
+        if box is not None:
+            self.submit("box", box)
+        elif not dragged:
+            self._click(event)
+
+    def _cancel_drag(self, _event=None):
+        if self.drag_start is None:
+            return None
+        self.drag_start, self.dragged = None, False
+        self.canvas.delete("drag-box")
+        return "break"
+
+    def submit(self, action, target=None):
         if self.bar.service.busy():
             return
         params = {"action": action, "key": self.key, "operation": self.operation, "query": self.query.get().strip()}
         if action == "grow":
             params.update(key=self.bar.watcher.snapshot().get("documentKey"), pixels=self.radius.get())
         elif action == "click":
-            params["point"] = point
+            params["point"] = target
+        elif action == "box":
+            params["box"] = target
         try:
             self.bar.service.start("select", params)
         except (ValueError, RuntimeError) as exc:

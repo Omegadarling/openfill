@@ -37,6 +37,11 @@ class InlinePanelTests(unittest.TestCase):
         self.qwen_name, self.sdxl_name = "Qwen Lightning · Local ComfyUI", "SDXL · Local ComfyUI"
         self.service = service = Mock()
         service.app.settings = Settings(remote_fibo=True, active_model=self.qwen)
+        from openfill_photocraft.engine_routes import EngineRoutes
+
+        service.routes = EngineRoutes(service.app, self.profile)
+        service.app_for.side_effect = service.routes.app_for
+        service.configure_engines.side_effect = service.routes.save
         service.app.paths.config = self.profile / "openfill" / "config.json"
         service.app.source_label.return_value = "Local ComfyUI"
         service.engine = "ready"

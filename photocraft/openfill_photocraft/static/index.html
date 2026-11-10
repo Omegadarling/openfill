@@ -54,6 +54,8 @@ textarea:focus,input:focus,.select select:focus{border-color:var(--accent)}
 .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .field{display:flex;flex-direction:column;gap:6px;min-width:0}
+#body-engine .field>select{width:100%;height:32px;padding:0 8px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--text);color-scheme:dark;font:inherit;cursor:pointer}
+#body-engine .field>select:focus-visible,.check input:focus-visible+.box{outline:2px solid var(--accent);outline-offset:1px}
 .btn{height:32px;padding:0 12px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--text);white-space:nowrap;cursor:pointer;flex:none}
 .btn:hover{background:var(--seg)}
 .btn.accent{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
@@ -140,10 +142,11 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     <div class="seg s12" id="edit-tools" role="group" aria-label="Edit tool" hidden><button data-tool="fill">Fill</button><button data-tool="expand">Expand</button><button data-tool="txt2img">Create</button></div>
     <div class="context" id="context"><span id="ctx-icon"></span><span id="ctx-text">Connecting to PhotoCraft...</span></div>
     <div id="select-box" class="stack" hidden>
-      <div class="small">WeVisOne-VL · Click an object or describe it. Blue shows the current selection.</div>
-      <div style="display:grid;place-items:center;min-height:100px;background:#18191b;border-radius:5px">
+      <div class="small">WeVisOne-VL · Click an object, drag a box around it, or describe it. Blue shows the current selection.</div>
+      <div id="select-surface" style="position:relative;display:grid;place-items:center;min-height:100px;background:#18191b;border-radius:5px">
         <span class="small" id="select-placeholder">Reading the canvas…</span>
-        <img id="select-image" alt="Click an object in the current PhotoCraft canvas" hidden style="max-width:100%;max-height:300px;width:auto;height:auto;cursor:crosshair">
+        <img id="select-image" alt="Click an object or drag a box around it in the current PhotoCraft canvas" draggable="false" hidden style="max-width:100%;max-height:300px;width:auto;height:auto;cursor:crosshair;touch-action:none;user-select:none">
+        <span id="select-marquee" aria-hidden="true" hidden style="position:absolute;pointer-events:none;border:2px dashed var(--accent);background:#4a8ef019"></span>
       </div>
       <div class="seg s12" id="select-ops" role="group" aria-label="Combine selection"><button data-op="replace" class="on">Replace</button><button data-op="add">Add</button><button data-op="subtract">Subtract</button></div>
       <label class="field"><span class="label">Describe an object (optional)</span><input id="select-query" type="text" maxlength="500" placeholder="e.g. the cup on the left"></label>
@@ -217,6 +220,13 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <button type="button" class="grip" draggable="true" aria-label="Reorder Engine" title="Drag to reorder, or use the Up and Down arrows">⠿</button>
     </div>
     <div id="body-engine" class="section-body stack" hidden>
+    <label class="check"><input type="checkbox" id="multi-engine"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span><span>Multi-engine</span></label>
+    <div id="engine-assignments" class="stack" hidden>
+      <label class="field"><span class="label">Select</span><select id="engine-select" aria-label="Select engine"></select></label>
+      <label class="field"><span class="label">Edit</span><select id="engine-edit" aria-label="Edit engine"></select></label>
+      <label class="field"><span class="label">Remove</span><select id="engine-remove" aria-label="Remove engine"></select></label>
+    </div>
+    <div id="shared-engine" class="stack" hidden><label class="field"><span class="label">Shared engine</span><select id="fibo-source" aria-label="Shared engine"></select></label><div class="small" id="source-detail"></div></div>
     <div class="stack" id="sec-engine" style="gap:12px">
       <div class="field"><span class="label">ComfyUI folder</span><input id="s-comfy_dir" type="text" aria-label="ComfyUI folder"></div>
       <label class="check"><input type="checkbox" id="s-autostart"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>Start the AI engine with PhotoCraft</span></label>
@@ -235,6 +245,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     </div>
     <div id="body-generation" class="section-body stack" hidden>
     <div class="stack" id="sec-generation" style="gap:12px">
+      <div class="small" id="remote-defaults" hidden>Qwen Lightning uses its four-step schedule. FIBO Turbo uses 4 steps and FIBO Dev uses 30. SDXL uses 25 steps and 75% change strength.</div>
       <div class="grid2" data-legacy-generation><div class="field"><span class="label">Steps</span><input id="s-steps" type="number"></div><div class="field"><span class="label">Prompt strictness (CFG)</span><input id="s-cfg" type="number" step="0.5"></div></div>
       <div class="grid2" data-legacy-generation><div class="field"><span class="label">Repaint margin (%)</span><input id="s-grow_percent" type="number"></div><div class="field"><span class="label">Edge softness (%)</span><input id="s-feather_percent" type="number"></div></div>
       <div class="small" data-legacy-generation>Steps: more is slower and finer. Strictness: how closely the prompt is followed. Margin: how far past the selection the fill may repaint, as a share of its size.</div>
@@ -319,23 +330,67 @@ $("select-radius").oninput=()=>{$("select-px").textContent=$("select-radius").va
 $("select-grow").onclick=()=>submitSelection("grow");
 $("select-query").oninput=selectButtons;
 $("select-query").onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();submitSelection("describe")}};
-$("select-image").onclick=e=>{
-  const r=e.currentTarget.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
-  if(x>=0&&x<1&&y>=0&&y<1)submitSelection("click",[x,y]);
+const selectImage=$("select-image"), marquee=$("select-marquee");
+let drag=null;
+function endSelectionDrag(){
+  if(!drag)return;
+  const id=drag.id;
+  drag=null;marquee.hidden=true;
+  if(selectImage.hasPointerCapture(id))selectImage.releasePointerCapture(id);
+}
+selectImage.onpointerdown=e=>{
+  if(e.button!==0||!e.isPrimary||drag||busy||pendingVariations||submittingSelection||!selectKey||selectKey!==pc.documentKey)return;
+  const r=selectImage.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
+  if(x<0||x>=1||y<0||y>=1)return;
+  e.preventDefault();
+  drag={id:e.pointerId,key:selectKey,x,y,screenX:e.clientX,screenY:e.clientY,moved:false};
+  selectImage.setPointerCapture(e.pointerId);
 };
+function selectionDragBox(e){
+  const r=selectImage.getBoundingClientRect();
+  if(!r.width||!r.height)return null;
+  drag.moved ||= Math.max(Math.abs(e.clientX-drag.screenX),Math.abs(e.clientY-drag.screenY))>=4;
+  if(!drag.moved)return null;
+  const x=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width)),y=Math.min(1,Math.max(0,(e.clientY-r.top)/r.height));
+  const box=[Math.min(x,drag.x),Math.min(y,drag.y),Math.max(x,drag.x),Math.max(y,drag.y)];
+  const surface=$("select-surface").getBoundingClientRect();
+  Object.assign(marquee.style,{left:(r.left-surface.left+box[0]*r.width)+"px",top:(r.top-surface.top+box[1]*r.height)+"px",
+    width:((box[2]-box[0])*r.width)+"px",height:((box[3]-box[1])*r.height)+"px"});
+  marquee.hidden=false;
+  return box;
+}
+selectImage.onpointermove=e=>{if(drag?.id===e.pointerId)selectionDragBox(e)};
+selectImage.onpointerup=e=>{
+  if(drag?.id!==e.pointerId)return;
+  const box=selectionDragBox(e),{key,moved}=drag;
+  endSelectionDrag();
+  if(key!==pc.documentKey||key!==selectKey)return;
+  if(moved){
+    if(box&&box[0]<box[2]&&box[1]<box[3])submitSelection("box",box);
+  }else{
+    const r=selectImage.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
+    if(x>=0&&x<1&&y>=0&&y<1)submitSelection("click",[x,y]);
+  }
+};
+selectImage.onpointercancel=selectImage.onlostpointercapture=e=>{if(drag?.id===e.pointerId)endSelectionDrag()};
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&drag){e.preventDefault();endSelectionDrag()}});
+window.addEventListener("blur",endSelectionDrag);
 function selectButtons(){
   if(mode!=="select")return;
   const blocked=busy||pendingVariations||submittingSelection;
   $("select-grow").disabled=blocked||!sel||!pc.documentKey;
   $("go").disabled=blocked||!selectKey||selectKey!==pc.documentKey||!$("select-query").value.trim()||(combine==="subtract"&&!sel);
 }
-async function submitSelection(action,point){
+async function submitSelection(action,target){
   if(mode!=="select"||busy||pendingVariations||submittingSelection)return;
   const key=action==="grow"?pc.documentKey:selectKey;
   if(!key||key!==pc.documentKey)return;
   submittingSelection=true;selectButtons();
   try{
-    await post("/api/select",{action,key,point,operation:combine,query:$("select-query").value.trim(),pixels:+$("select-radius").value});
+    const params={action,key,operation:combine,query:$("select-query").value.trim(),pixels:+$("select-radius").value};
+    if(action==="click")params.point=target;
+    if(action==="box")params.box=target;
+    await post("/api/select",params);
     await tick();
   }catch(e){say(e.message,"bad")}finally{submittingSelection=false;selectButtons()}
 }
@@ -343,6 +398,7 @@ async function selectPreview(){
   if(document.hidden||layout.collapsed.includes("edit"))return;
   const key=pc.documentKey||"", img=$("select-image"), hint=$("select-placeholder");
   if(selectKey!==key||pendingVariations){
+    endSelectionDrag();
     img.hidden=true;selectKey="";hint.hidden=false;
     hint.textContent=pendingVariations?"Keep or discard the current choices first.":key?"Reading the canvas…":"Open an image in PhotoCraft.";
   }
@@ -422,7 +478,8 @@ $("remove-scene").onchange = () => {
   if (choice && choice.method && removalChoices().some(o => o[1] === choice.method)) removal = choice.method;
   fillSelect();refreshAdvice();
 };
-function setMode(m){if(remoteFibo&&["expand","txt2img"].includes(m))m="fill";mode=m;note=null;
+function setMode(m){if(remoteFibo&&["expand","txt2img"].includes(m))m="fill";const changed=mode!==m;mode=m;note=null;
+  if(changed){inventoryReady=false;models=[];advice=null;void tick().then(loadModels)}
   const edit=["fill","expand","txt2img"].includes(m),selecting=m==="select";
   segPick($("modes"),$("modes").querySelector(`[data-mode="${edit?"fill":m}"]`));
   segPick($("edit-tools"),$("edit-tools").querySelector(`[data-tool="${m}"]`));
@@ -661,7 +718,7 @@ $("model").onchange=async()=>{const v=$("model").value;
   if(v==="__manage"){delete $("model").dataset.key;fillSelect();openSection("models");return}
   drawReferences();
   if(mode==="remove"){quickRemove="";removal=v;selectedScene="";fillSelect();return}
-  if(v&&v!==activeId&&usable().some(r=>r.id===v&&(r.capabilities||[]).includes(mode))){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
+  if(v&&v!==activeId&&usable().some(r=>r.id===v&&(r.capabilities||[]).includes(mode))){try{await post("/api/models/activate",{id:v,mode,source:backendSource});activeId=v}catch(e){say(e.message,"bad")}}};
 function seedOf(){const v=$("seed").value.trim();return v===""?-1:parseInt(v)}
 function say(t,kind){note=t?{text:t,kind:kind||"bad",base:baseContext()[0]}:null;context()}
 const generationDirty = new Set();
@@ -700,7 +757,7 @@ async function start(kind,body){
 }
 $("go").onclick=()=>{if(mode==="select"){submitSelection("describe");return}if(busy||!$("model").value||$("model").value==="__manage")return;const prompt=$("prompt").value.trim(),model=$("model").value;
   if(mode==="fill"||mode==="remove"){if(!sel){say(mode==="remove"?REMOVE_SELECTION:NO_SEL,"bad");return}
-    const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:remoteFibo?undefined:(mode==="fill"?+$("strength").value:1),seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
+    const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:remoteFibo?undefined:(mode==="fill"?+$("strength").value:1),seed:mode==="fill"?seedOf():-1,remove:mode==="remove",engineSource:backendSource};
     if(mode==="remove"){if(selectedScene==="auto"&&autoWaiting())return;
       b.removal=selectedScene==="auto"?advice.method:model;b.model="active";
       if(selectedScene==="auto"){b.adviceKey=advice.key;b.adviceSource=advice.source}
@@ -808,19 +865,75 @@ function showVariations(job) {
   $("variation-actions").querySelectorAll("button").forEach(button=>button.disabled=busy);
   $("pick").hidden = names.length === 0;
 }
+const engineModes=["select","edit","remove"];
+let routing=null,routingBusy=false,sharedSources=null,stateSequence=0,lastState=0;
+function syncRoutes(data,isBusy){
+  if(!data)return;
+  const changed=JSON.stringify(data)!==JSON.stringify(routing);
+  routing=data;
+  $("multi-engine").checked=data.enabled;
+  $("multi-engine").disabled=isBusy||routingBusy;
+  $("engine-assignments").hidden=!data.enabled;
+  for(const kind of engineModes){
+    const picker=$("engine-"+kind);
+    if(changed){
+      const options=data.choices.filter(item=>item.modes.includes(kind)).map(item=>new Option(item.name,item.id));
+      picker.replaceChildren(...options,new Option("Other ComfyUI URL…","custom"));
+    }
+    picker.value=data.routes[kind];
+    picker.disabled=isBusy||routingBusy;
+  }
+}
+async function saveRoutes(kind){
+  if(!routing||routingBusy)return;
+  const routes={...routing.routes};
+  if(kind){
+    let key=$("engine-"+kind).value;
+    if(key==="custom")key=window.prompt("ComfyUI server URL");
+    if(!key){syncRoutes(routing,busy);return}
+    routes[kind]=key;
+  }
+  routingBusy=true;
+  const enabled=$("multi-engine").checked;
+  try{
+    syncRoutes(routing,true);
+    const saved=await post("/api/backend/routing",{enabled,routes});
+    syncRoutes(saved,false);settingsNote("");
+  }catch(e){settingsNote(e.message,"bad")}
+  finally{routingBusy=false;await tick();await loadModels()}
+}
+$("multi-engine").onchange=()=>saveRoutes();
+for(const kind of engineModes)$("engine-"+kind).onchange=()=>saveRoutes(kind);
+$("fibo-source").onchange=async()=>{
+  const source=$("fibo-source").value;$("fibo-source").disabled=true;settingsNote("Connecting…","dim");
+  try{const r=await post("/api/backend/source",{source});settingsNote(r.detail,r.ok?"ok":"bad")}
+  catch(e){settingsNote(e.message,"bad")}finally{await tick();await loadModels()}
+};
 async function tick(){
-  let s;try{s=await get("/api/state")}catch(e){$("status").textContent="OpenFill stopped";return}
-  if(s.remoteFibo&&!remoteFibo){remoteFibo=true;
-    $("token").closest(".stack").hidden=true;$("stop").hidden=true;$("save-engine").hidden=true;
-    Array.from($("sec-engine").children).slice(0,5).forEach(e=>e.hidden=true);
-    const remote=document.createElement("div");remote.className="stack";remote.innerHTML='<label class="field"><span class="label">Run edits on</span><select id="fibo-source" aria-label="ComfyUI source"></select></label><div class="small" id="source-detail"></div><div class="small">Start ComfyUI on the chosen computer. OpenFill connects to that source and lists its available Qwen, FIBO, and SDXL edit models.</div>';$("sec-engine").prepend(remote);
-    const sources=await get("/api/sources");$("fibo-source").replaceChildren(...sources.sources.map(src=>{const option=document.createElement("option");option.value=src.id;option.textContent=src.name;return option}));
-    $("fibo-source").onchange=async()=>{const source=$("fibo-source").value;$("fibo-source").disabled=true;settingsNote("Connecting to the selected source...","dim");try{const r=await post("/api/backend/source",{source});settingsNote(r.name+": "+r.detail,r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}finally{await loadModels();await tick()}};
-    document.querySelectorAll("[data-legacy-generation]").forEach(e=>e.hidden=true);$("fibo-edit-settings").hidden=false;
-    const defaults=document.createElement("div");defaults.className="small";defaults.textContent="Qwen Image 2.1: describe the change and what to keep. Lightning v2 RL uses its own four-step schedule. FIBO: describe the change; Turbo 4 steps / CFG 1, Dev 30 steps / CFG 5. SDXL: describe the desired selected content; 25 steps / CFG 6, DPM++ 2M/Karras, 75% change strength. Pixels outside the selection are preserved.";$("sec-generation").prepend(defaults);setMode(mode)}
+  const requested=mode,seq=++stateSequence;
+  let s;try{s=await get("/api/state?mode="+requested)}catch(e){$("status").textContent="OpenFill stopped";return}
+  if(mode!==requested||seq<lastState)return;
+  lastState=seq;
+  if(!routingBusy)syncRoutes(s.engineRouting,s.busy);
+  if(s.sharedRemote&&!sharedSources){
+    sharedSources= get("/api/sources").then(data=>{
+      $("fibo-source").replaceChildren(...data.sources.map(src=>new Option(src.name,src.id)));
+      $("fibo-source").value=s.sharedSource;
+    }).catch(()=>{sharedSources=null});
+  }
+  $("shared-engine").hidden=!s.sharedRemote||Boolean(routing?.enabled);
+  $("fibo-source").value=s.sharedSource;$("fibo-source").disabled=s.busy;
+  $("source-detail").textContent=s.engineRouting?.shared||"";
+  $("token").closest(".stack").hidden=s.remoteFibo;
+  $("stop").hidden=s.remoteFibo;$("save-engine").hidden=s.sharedRemote;
+  Array.from($("sec-engine").children).slice(0,5).forEach(e=>e.hidden=s.sharedRemote);
+  document.querySelectorAll("[data-legacy-generation]").forEach(e=>e.hidden=s.remoteFibo);
+  $("fibo-edit-settings").hidden=!s.remoteFibo;
+  $("remote-defaults").hidden=!s.remoteFibo;
+  if(s.remoteFibo!==remoteFibo){remoteFibo=s.remoteFibo;setMode(mode)}
   if(s.pick){if(lastPick<0)lastPick=s.pick.seq;else if(s.pick.seq!==lastPick){lastPick=s.pick.seq;
     location.hash="#"+(s.pick.action==="panel"?"fill":s.pick.action);window.focus();if(s.pick.action!=="remove")$("prompt").focus();if(s.pick.action==="remove"&&!s.busy){setMode("remove");if(selectedScene==="auto")quickRemove=s.photocraft?.selectionKey||"";else $("go").click()}}}
-  if(remoteFibo){if(backendSource!==s.backendSource){inventoryReady=false;models=[];fillSelect();}backendSource=s.backendSource;$("fibo-source").value=s.backendSource;$("fibo-source").disabled=s.busy;$("source-detail").textContent=s.backendName+" · "+s.backendUrl;}
+  if(backendSource!==s.backendSource){backendSource=s.backendSource;inventoryReady=false;models=[];advice=null;fillSelect();void loadModels()}
   pc=s.photocraft||{};doc=pc.document||null;sel=pc.selection||null;comfy=s.comfyReady;
   if(s.activeModel!==activeId){activeId=s.activeModel||"";fillSelect()}
   const ready=comfy||(mode==="remove"&&$("model").value===TEXTURE_REMOVAL);
@@ -857,7 +970,7 @@ function detail(r){if(r.template==="sdxl_edit")return "SDXL masked editing · de
   if(!caps.length||r.runnable===false)what=r.neededBy||"Needed by other models";return[what,r.size].filter(Boolean).join(" · ")}
 function mnote(t,kind){const n=$("mnote");n.hidden=!t;n.textContent=t||"";n.className="note "+(kind||"bad")}
 async function act(fn){try{await fn();mnote("")}catch(e){mnote(e.message,"bad")}loadModels()}
-async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}if(remoteFibo&&m.source!==backendSource)return;inventoryReady=true;models=m.rows||[];removalScenes=m.removalScenes||[];$("hw").textContent=m.hardware||m.error||"";
+async function loadModels(){const requested=mode;let m;try{m=await get("/api/models?mode="+requested)}catch(e){return}if(mode!==requested||(m.source||"")!==backendSource)return;inventoryReady=true;models=m.rows||[];removalScenes=m.removalScenes||[];$("hw").textContent=m.hardware||m.error||"";
   fillSelect();if(layout.collapsed.includes("models"))return;
   const inst=models.filter(r=>r.installed).sort((a,b)=>(!a.runnable)-(!b.runnable)||(!a.active)-(!b.active)||a.name.localeCompare(b.name));
   const avail=models.filter(r=>!r.installed&&r.runnable).sort((a,b)=>a.name.localeCompare(b.name));
@@ -881,7 +994,7 @@ function syncFiboOptions(){const full=$("s-fibo_context_mode").value==="full",am
 $("s-fibo_edit_mode").onchange=syncFiboOptions;$("s-fibo_context_mode").onchange=syncFiboOptions;$("s-fibo_context_percent").oninput=syncFiboOptions;$("s-fibo_boundary_match").onchange=syncFiboOptions;$("s-fibo_boundary_strength").oninput=syncFiboOptions;
 async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el||generationDirty.has(el.id))continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}syncAutoFeather();syncFiboOptions()}
 function settingsNote(t,kind,id="check-out"){const n=$(id);n.hidden=!t;n.textContent=t;n.className="note "+(kind||"dim")}
-$("check").onclick=async()=>{settingsNote(remoteFibo?"Checking the selected ComfyUI source...":"Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
+$("check").onclick=async()=>{settingsNote("Checking the engine for this mode…","dim");try{const r=await post("/api/backend/check",{mode});settingsNote(r.detail+(r.device?` · ${r.device}`:""),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
 $("stop").onclick=async()=>{const r=await post("/api/backend/stop");settingsNote(r.message,"dim")};
 $("logs").onclick=()=>post("/api/logs");
 $("save-engine").onclick=async()=>{
