@@ -5,6 +5,10 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.2] - 2026-11-10
+
+- The native Select panel now reserves space for the Grow slider and pixel field at its standard width. You can click into the field, type the amount, and apply it with Enter.
+
 ## [0.18.1] - 2026-11-10
 
 - In Select, type an exact Grow amount from 1 to 500 document pixels or use the slider. Press Enter in the field or click Grow to apply it once. The native and browser panels share the last applied amount across sessions.

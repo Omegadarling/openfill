@@ -1,6 +1,6 @@
 # OpenFill for PhotoCraft development notes
 
-PhotoCraft accepts whole-pixel selection expansion from 1 to 500. Keep the slider's initial 1–64 span for fine adjustments and extend it for a larger typed amount. Save the numeric preference to the companion profile only after PhotoCraft successfully expands the selection. When polling the shared value in the other panel, preserve any unsubmitted draft. Measure all four edges of a marquee and check Undo when changing this control.
+PhotoCraft accepts whole-pixel selection expansion from 1 to 500. Keep the slider's initial 1–64 span for fine adjustments and extend it for a larger typed amount. Save the numeric preference to the companion profile only after PhotoCraft successfully expands the selection. When polling the shared value in the other panel, preserve any unsubmitted draft. Native labels sharing a row need `ui.small(..., wrap=0)`. The default width fills the entire row and can hide the field or slider. Verify that both widgets are mapped at the standard panel width, type into the visible field, measure the selection's four edges, and check Undo.
 
 Box gestures start inside the displayed image, exclude the letterbox, and clip the release to the image edge. Keep the original composite for small crops. Rank instance masks by how closely they fit the box. If a crop cuts off the candidate, retry on the full image. Test reverse drags, Escape, misses and normal clicks. Only the model's matte enters the PhotoCraft undo history.
 

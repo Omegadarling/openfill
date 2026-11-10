@@ -67,7 +67,7 @@ class SelectView(tk.Frame):
         row.pack(fill="x", pady=(8, 0))
         self.grow = ui.Button(row, "Grow", lambda: self.submit("grow"), width=60)
         self.grow.pack(side="right")
-        ui.small(row, "px").pack(side="right", padx=(3, 7))
+        ui.small(row, "px", wrap=0).pack(side="right", padx=(3, 7))
         self.grow_entry = tk.Entry(
             row,
             textvariable=self.grow_amount,
@@ -85,7 +85,7 @@ class SelectView(tk.Frame):
         self.grow_entry.pack(side="right", ipady=4, padx=(5, 0))
         self.grow_entry.bind("<Return>", self._enter_grow)
         self.grow_entry.bind("<KP_Enter>", self._enter_grow)
-        ui.small(row, "Grow selection").pack(side="left")
+        ui.small(row, "Grow selection", wrap=0).pack(side="left")
         self.grow_scale = tk.Scale(
             row,
             from_=1,

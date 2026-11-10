@@ -119,6 +119,13 @@ class InlinePanelTests(unittest.TestCase):
         ui.FONTS = None
         root.destroy()
 
+    def test_grow_number_and_slider_fit_at_the_native_panel_width(self):
+        view = self.bar.select_view_panel
+        row = view.grow.master
+        row.update_idletasks()
+        self.assertLessEqual(row.winfo_reqwidth(), ui.CW)
+        self.assertGreater(view.grow_entry.winfo_reqwidth(), self.bar.fonts.body.measure("500"))
+
     def test_select_click_uses_image_area_and_never_submits_edit_settings(self):
         bar, view = self.bar, self.bar.select_view_panel
         self.service.layers = []
