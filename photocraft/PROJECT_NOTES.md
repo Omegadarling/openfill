@@ -1,5 +1,7 @@
 # OpenFill for PhotoCraft development notes
 
+PhotoCraft accepts whole-pixel selection expansion from 1 to 500. Keep the slider's initial 1–64 span for fine adjustments and extend it for a larger typed amount. Save the numeric preference to the companion profile only after PhotoCraft successfully expands the selection. When polling the shared value in the other panel, preserve any unsubmitted draft. Measure all four edges of a marquee and check Undo when changing this control.
+
 Box gestures start inside the displayed image, exclude the letterbox, and clip the release to the image edge. Keep the original composite for small crops. Rank instance masks by how closely they fit the box. If a crop cuts off the candidate, retry on the full image. Test reverse drags, Escape, misses and normal clicks. Only the model's matte enters the PhotoCraft undo history.
 
 Engine routing belongs to the companion profile. The shared engine is the default for every operation, including Select on a 0.17 profile with a helper installed. In Multi-engine, derive the destination from the submitted job, and use it for the model inventory, removal advice, actual GPU work and cancellation. Each panel requests inventory by its own mode, since the browser and native panels can show different tabs at the same time. Keep per-engine edit preferences separate from the shared configuration. Tab changes should never submit a prompt or evict models. When checking residency, compare the servers and returned mattes across actual jobs.

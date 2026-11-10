@@ -26,6 +26,7 @@ from openfill.config import normalize_panel_layout, validate_fibo_settings
 
 from . import __version__
 from .references import MAX_UPLOAD
+from .selection import saved_grow_pixels
 from .service import Service
 
 STATIC = Path(__file__).with_name("static")
@@ -80,6 +81,9 @@ class Api:
             "sharedRemote": self.service.app.settings.remote_fibo,
             "sharedSource": self.service.app.settings.fibo_source,
             "engineRouting": self.service.routes.describe() if hasattr(self.service, "routes") else None,
+            "selectionGrowPixels": saved_grow_pixels(
+                getattr(getattr(self.service, "selection", None), "grow_pixels", None)
+            ),
             "activeModel": "" if selecting else app.active_model_id(),
             "comfyReady": ready,
             "comfyProblem": "" if ready else _comfy_problem(app),

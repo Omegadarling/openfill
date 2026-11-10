@@ -12,6 +12,9 @@ import tkinter as tk
 from PIL import Image
 
 from . import ui
+from .selection import MAX_GROW_PIXELS, saved_grow_pixels, valid_grow_pixels
+
+QUICK_GROW_PIXELS = 64
 
 
 class SelectView(tk.Frame):
@@ -25,7 +28,10 @@ class SelectView(tk.Frame):
         self.dragged = False
         self.operation = "replace"
         self.query = tk.StringVar()
-        self.radius = tk.IntVar(value=4)
+        self.last_grow = saved_grow_pixels(getattr(bar.service.selection, "grow_pixels", None))
+        self.grow_amount = tk.StringVar(self, value=str(self.last_grow))
+        self.radius = tk.IntVar(self, value=self.last_grow)
+        self.syncing_grow = False
         ui.small(
             self,
             "WeVisOne-VL · Click an object, drag a box around it, or describe it. Blue shows the current selection.",
@@ -61,23 +67,81 @@ class SelectView(tk.Frame):
         row.pack(fill="x", pady=(8, 0))
         self.grow = ui.Button(row, "Grow", lambda: self.submit("grow"), width=60)
         self.grow.pack(side="right")
-        self.amount = ui.small(row, "4 px")
-        self.amount.pack(side="right", padx=6)
+        ui.small(row, "px").pack(side="right", padx=(3, 7))
+        self.grow_entry = tk.Entry(
+            row,
+            textvariable=self.grow_amount,
+            width=4,
+            justify="center",
+            bg=ui.WELL,
+            fg=ui.TEXT,
+            insertbackground=ui.TEXT,
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=ui.LINE,
+            highlightcolor=ui.ACCENT,
+            font=bar.fonts.body,
+        )
+        self.grow_entry.pack(side="right", ipady=4, padx=(5, 0))
+        self.grow_entry.bind("<Return>", self._enter_grow)
+        self.grow_entry.bind("<KP_Enter>", self._enter_grow)
         ui.small(row, "Grow selection").pack(side="left")
-        tk.Scale(
+        self.grow_scale = tk.Scale(
             row,
             from_=1,
-            to=64,
+            to=max(QUICK_GROW_PIXELS, self.last_grow),
             orient="horizontal",
             variable=self.radius,
             showvalue=False,
-            command=lambda v: self.amount.configure(text=f"{int(float(v))} px"),
             bg=ui.BG,
             fg=ui.TEXT,
             troughcolor=ui.WELL,
             highlightthickness=0,
             sliderlength=14,
-        ).pack(side="left", fill="x", expand=True)
+        )
+        self.grow_scale.pack(side="left", fill="x", expand=True)
+        self.grow_amount.trace_add("write", self._grow_number_changed)
+        self.radius.trace_add("write", self._grow_slider_changed)
+
+    def _pixels(self):
+        value = self.grow_amount.get()
+        if value.isascii() and value.isdecimal() and len(value) <= 3:
+            pixels = int(value)
+            if valid_grow_pixels(pixels):
+                return pixels
+        return None
+
+    def _grow_number_changed(self, *_):
+        if self.syncing_grow:
+            return
+        pixels = self._pixels()
+        if pixels is not None:
+            self.syncing_grow = True
+            try:
+                self.grow_scale.configure(to=max(QUICK_GROW_PIXELS, pixels))
+                self.radius.set(pixels)
+            finally:
+                self.syncing_grow = False
+        self.grow_entry.configure(
+            highlightbackground=ui.LINE if pixels is not None else ui.BAD,
+            highlightcolor=ui.ACCENT if pixels is not None else ui.BAD,
+        )
+        self.buttons()
+
+    def _grow_slider_changed(self, *_):
+        if self.syncing_grow:
+            return
+        self.syncing_grow = True
+        try:
+            self.grow_amount.set(str(self.radius.get()))
+        finally:
+            self.syncing_grow = False
+        self.grow_entry.configure(highlightbackground=ui.LINE, highlightcolor=ui.ACCENT)
+        self.buttons()
+
+    def _enter_grow(self, _event):
+        self.submit("grow")
+        return "break"
 
     def _operation(self, value):
         self.operation = value
@@ -88,7 +152,7 @@ class SelectView(tk.Frame):
         pc = self.bar.watcher.snapshot()
         idle = not self.bar.service.busy() and not self.bar.service.layers
         ready = bool(idle and self.key and self.key == pc.get("documentKey"))
-        self.grow.set(disabled=not (idle and pc.get("selection")))
+        self.grow.set(disabled=not (idle and pc.get("selection") and self._pixels() is not None))
         self.bar.go.set(
             disabled=not (ready and self.query.get().strip() and (pc.get("selection") or self.operation != "subtract"))
         )
@@ -96,6 +160,11 @@ class SelectView(tk.Frame):
     def update_view(self):
         if self.bar.collapsed or "edit" in self.bar.sections.collapsed:
             return
+        saved = saved_grow_pixels(getattr(self.bar.service.selection, "grow_pixels", None))
+        if saved != self.last_grow:
+            if self._pixels() == self.last_grow:
+                self.grow_amount.set(str(saved))
+            self.last_grow = saved
         pc = self.bar.watcher.snapshot()
         key = pc.get("documentKey") or ""
         blocked = bool(self.bar.service.layers)
@@ -210,7 +279,14 @@ class SelectView(tk.Frame):
             return
         params = {"action": action, "key": self.key, "operation": self.operation, "query": self.query.get().strip()}
         if action == "grow":
-            params.update(key=self.bar.watcher.snapshot().get("documentKey"), pixels=self.radius.get())
+            pixels = self._pixels()
+            if pixels is None:
+                self.bar._say(f"Enter a whole number from 1 to {MAX_GROW_PIXELS} pixels.", ui.BAD)
+                return
+            pc = self.bar.watcher.snapshot()
+            if self.bar.service.layers or not pc.get("selection") or not pc.get("documentKey"):
+                return
+            params.update(key=pc["documentKey"], pixels=pixels)
         elif action == "click":
             params["point"] = target
         elif action == "box":

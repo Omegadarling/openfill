@@ -5,6 +5,10 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.1] - 2026-11-10
+
+- In Select, type an exact Grow amount from 1 to 500 document pixels or use the slider. Press Enter in the field or click Grow to apply it once. The native and browser panels share the last applied amount across sessions.
+
 ## [0.18.0] - 2026-11-10
 
 - Drag a box in the Select preview to isolate a small or overlapping object using its actual outline. The picker can inspect the original pixels inside the box on large images. Click, Add, Subtract and Undo work with the same selection.

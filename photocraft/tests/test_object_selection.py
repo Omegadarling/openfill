@@ -18,6 +18,37 @@ from openfill_photocraft.wevisone import WeVisOne, choose_box_matte, choose_matt
 
 
 class SelectionTests(unittest.TestCase):
+    def test_grow_remembers_the_exact_radius_after_one_successful_document_edit(self):
+        doc = dict(name="Mask", revision=1, width=1600, height=1200, activeLayer=1, hasSelection=True)
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = Mock(profile=Path(directory))
+            bridge.client.call.return_value = {"session": {"active": 0}, "document": doc}
+            select = Selection(bridge)
+            self.assertEqual(select.grow_pixels, 4)
+            params = {"key": key_for(0, doc), "action": "grow"}
+            for pixels in (0, 501, -1, 5.5, True, "9", None):
+                with self.subTest(pixels=pixels), self.assertRaisesRegex(ValueError, "1 to 500"):
+                    select.validate({**params, "pixels": pixels})
+            for pixels in (1, 73, 500):
+                bridge.client.run.reset_mock()
+                select.run(None, {**params, "pixels": pixels}, Mock(), Mock(), Mock())
+                bridge.client.run.assert_called_once_with("select.modify.expand", radius=pixels)
+                self.assertEqual(Selection(bridge).grow_pixels, pixels)
+            bridge.client.run.side_effect = RuntimeError("editor unavailable")
+            with self.assertRaisesRegex(RuntimeError, "editor unavailable"):
+                select.run(None, {**params, "pixels": 27}, Mock(), Mock(), Mock())
+            self.assertEqual(select.grow_pixels, 500)
+            self.assertEqual(Selection(bridge).grow_pixels, 500)
+
+    def test_grow_uses_default_for_damaged_or_out_of_range_preferences(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = Mock(profile=Path(directory))
+            settings = bridge.profile / "selection-settings.json"
+            for invalid in ("{", "[]", '{"grow_pixels": 501}', '{"grow_pixels": true}'):
+                with self.subTest(invalid=invalid):
+                    settings.write_text(invalid, encoding="utf-8")
+                    self.assertEqual(Selection(bridge).grow_pixels, 4)
+
     def test_box_selects_small_overlapping_matte_and_preserves_its_tail_and_hole(self):
         behind = Image.new("L", (80, 60))
         behind.paste(255, (15, 10, 57, 44))

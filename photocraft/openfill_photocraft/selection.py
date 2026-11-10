@@ -6,8 +6,11 @@ from __future__ import annotations
 import base64
 import io
 import math
+from pathlib import Path
 
 from PIL import Image
+
+from openfill.supervisor import read_json, write_json
 
 from .bridge import PCImage
 from .selection_advice import document_key
@@ -15,6 +18,16 @@ from .wevisone import DEFAULT_QUERY, WeVisOne
 
 STALE = "The document or selection changed. Use the updated preview and try again."
 OPERATIONS = {"replace": "new", "add": "add", "subtract": "subtract"}
+DEFAULT_GROW_PIXELS = 4
+MAX_GROW_PIXELS = 500
+
+
+def valid_grow_pixels(value):
+    return type(value) is int and 1 <= value <= MAX_GROW_PIXELS
+
+
+def saved_grow_pixels(value):
+    return value if valid_grow_pixels(value) else DEFAULT_GROW_PIXELS
 
 
 def key_for(index, doc):
@@ -45,6 +58,9 @@ class Selection:
         self.bridge = bridge
         self.model = WeVisOne(bridge.profile)
         self.key, self.source, self.preview = "", None, None
+        self._settings_path = Path(bridge.profile) / "selection-settings.json"
+        stored = read_json(self._settings_path)
+        self.grow_pixels = saved_grow_pixels(stored.get("grow_pixels") if isinstance(stored, dict) else None)
 
     def capture(self, key):
         client = self.bridge.client
@@ -83,8 +99,8 @@ class Selection:
             if not doc.get("hasSelection"):
                 raise ValueError("Make a selection before growing it.")
             pixels = params.get("pixels")
-            if type(pixels) is not int or not 1 <= pixels <= 64:
-                raise ValueError("Choose a grow distance from 1 to 64 pixels.")
+            if not valid_grow_pixels(pixels):
+                raise ValueError(f"Choose a whole number from 1 to {MAX_GROW_PIXELS} pixels.")
             return
         if action not in ("click", "box", "describe") or params.get("operation", "replace") not in OPERATIONS:
             raise ValueError("Choose a valid selection action.")
@@ -121,8 +137,16 @@ class Selection:
         if action == "grow":
             begin_commit()
             active(client, key)
-            client.run("select.modify.expand", radius=params["pixels"])
-            return f"Selection grew by {params['pixels']} px."
+            pixels = params["pixels"]
+            client.run("select.modify.expand", radius=pixels)
+            message = f"Selection grew by {pixels} px."
+            if pixels != self.grow_pixels:
+                try:
+                    write_json(self._settings_path, {"grow_pixels": pixels})
+                except OSError:
+                    return f"{message} Could not save this amount for next time."
+                self.grow_pixels = pixels
+            return message
         progress(0.05, "Finding the object with WeVisOne-VL…")
         mask = self.model.mask(
             app,

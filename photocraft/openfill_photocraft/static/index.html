@@ -50,6 +50,10 @@ textarea:focus,input:focus,.select select:focus{border-color:var(--accent)}
 .select svg{position:absolute;right:8px;top:8px;pointer-events:none}
 .row{display:flex;align-items:center;gap:12px;min-height:32px}
 .row>label{width:84px;flex:none;font-size:12px;line-height:16px;color:var(--dim)}
+.grow-row{gap:6px}
+#select-radius{min-width:30px;flex:1}
+#select-px{width:46px;padding:0 4px;text-align:center}
+#select-px[aria-invalid=true]{border-color:var(--bad)}
 .under{text-align:center;margin:-4px 0 0 96px}
 .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -150,7 +154,12 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       </div>
       <div class="seg s12" id="select-ops" role="group" aria-label="Combine selection"><button data-op="replace" class="on">Replace</button><button data-op="add">Add</button><button data-op="subtract">Subtract</button></div>
       <label class="field"><span class="label">Describe an object (optional)</span><input id="select-query" type="text" maxlength="500" placeholder="e.g. the cup on the left"></label>
-      <div class="row"><label for="select-radius">Grow selection</label><input id="select-radius" type="range" min="1" max="64" step="1" value="4" style="min-width:30px;flex:1"><output id="select-px" for="select-radius">4 px</output><button class="btn" id="select-grow">Grow</button></div>
+      <div class="row grow-row">
+        <label for="select-px">Grow selection</label>
+        <input id="select-radius" type="range" min="1" max="64" step="1" value="4" aria-label="Grow amount slider">
+        <input id="select-px" type="number" min="1" max="500" step="1" value="4" required aria-label="Grow amount in pixels" title="1–500 document pixels">
+        <span class="small">px</span><button class="btn" id="select-grow">Grow</button>
+      </div>
     </div>
     <div class="row" id="remove-scene-row" hidden><label for="remove-scene">Suggest for</label><div class="select"><select id="remove-scene"><option value="auto">Automatic from selection</option></select></div></div>
     <div class="small" id="remove-text" hidden>Select the object and its shadow. Remove includes a small edge margin to clear outlines.</div>
@@ -326,7 +335,35 @@ $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset
 $("edit-tools").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.tool)};
 let selectKey="", fetchingKey="", retryPreview=0, combine="replace", submittingSelection=false;
 $("select-ops").onclick=e=>{const b=e.target.closest("button");if(b){combine=b.dataset.op;segPick($("select-ops"),b);selectButtons()}};
-$("select-radius").oninput=()=>{$("select-px").textContent=$("select-radius").value+" px"};
+const growInput=$("select-px"),growSlider=$("select-radius"),quickGrowMax=Number(growSlider.max);
+let lastGrowPixels=Number(growInput.value);
+function growPixels(){
+  return /^\d{1,3}$/.test(growInput.value)&&growInput.validity.valid?growInput.valueAsNumber:null;
+}
+function growNumberChanged(){
+  const pixels=growPixels();
+  growInput.setAttribute("aria-invalid",String(pixels===null));
+  if(pixels!==null){
+    growSlider.max=Math.max(quickGrowMax,pixels);
+    growSlider.value=pixels;
+  }
+  selectButtons();
+}
+function syncSavedGrow(pixels){
+  if(!Number.isInteger(pixels)||pixels===lastGrowPixels)return;
+  if(growPixels()===lastGrowPixels){
+    growInput.value=pixels;
+    growNumberChanged();
+  }
+  lastGrowPixels=pixels;
+}
+growInput.oninput=growNumberChanged;
+growSlider.oninput=()=>{
+  growInput.value=growSlider.value;
+  growInput.setAttribute("aria-invalid","false");
+  selectButtons();
+};
+growInput.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();submitSelection("grow")}};
 $("select-grow").onclick=()=>submitSelection("grow");
 $("select-query").oninput=selectButtons;
 $("select-query").onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();submitSelection("describe")}};
@@ -378,16 +415,19 @@ window.addEventListener("blur",endSelectionDrag);
 function selectButtons(){
   if(mode!=="select")return;
   const blocked=busy||pendingVariations||submittingSelection;
-  $("select-grow").disabled=blocked||!sel||!pc.documentKey;
+  $("select-grow").disabled=blocked||!sel||!pc.documentKey||growPixels()===null;
   $("go").disabled=blocked||!selectKey||selectKey!==pc.documentKey||!$("select-query").value.trim()||(combine==="subtract"&&!sel);
 }
 async function submitSelection(action,target){
   if(mode!=="select"||busy||pendingVariations||submittingSelection)return;
   const key=action==="grow"?pc.documentKey:selectKey;
   if(!key||key!==pc.documentKey)return;
+  const pixels=growPixels();
+  if(action==="grow"&&(!sel||pixels===null))return;
   submittingSelection=true;selectButtons();
   try{
-    const params={action,key,operation:combine,query:$("select-query").value.trim(),pixels:+$("select-radius").value};
+    const params={action,key,operation:combine,query:$("select-query").value.trim()};
+    if(action==="grow")params.pixels=pixels;
     if(action==="click")params.point=target;
     if(action==="box")params.box=target;
     await post("/api/select",params);
@@ -914,6 +954,7 @@ async function tick(){
   let s;try{s=await get("/api/state?mode="+requested)}catch(e){$("status").textContent="OpenFill stopped";return}
   if(mode!==requested||seq<lastState)return;
   lastState=seq;
+  syncSavedGrow(s.selectionGrowPixels);
   if(!routingBusy)syncRoutes(s.engineRouting,s.busy);
   if(s.sharedRemote&&!sharedSources){
     sharedSources= get("/api/sources").then(data=>{
