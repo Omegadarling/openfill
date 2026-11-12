@@ -317,6 +317,10 @@ class RemoteModels:
             if not force and time.monotonic() - self.checked < 10:
                 return list(self.entries)
             try:
+                if not self.client.is_alive(timeout=2):
+                    raise BackendUnavailable(
+                        f"{self.source_label} is not answering. Start ComfyUI and use Engine > Check."
+                    )
                 self.entries = discover(self.client, self.source_label)
                 self.error = ""
             except Exception as err:

@@ -167,10 +167,11 @@ class Refresher:
         self.mode = "edit"
         self.inventories = {}
         self.cache = cache
-        source = service.app.settings.fibo_source if service.app.settings.remote_fibo else None
+        initial = service.app_for("edit")
+        source = initial.settings.fibo_source if initial.settings.remote_fibo else ""
         self.facts: dict[str, Any] = self._load_cache(source)
-        if service.app.settings.remote_fibo:
-            self.facts.update(hardware=f"{service.app.source_label()} · ComfyUI", gpu_vendor="")
+        if initial.settings.remote_fibo:
+            self.facts.update(hardware=f"{initial.source_label()} · ComfyUI", gpu_vendor="")
         self._hardware: str | None = self.facts.get("hardware") or None
         self._vendor: str | None = self.facts.get("gpu_vendor") or None  # nvidia, amd, intel, apple, none
         self._saved = ""

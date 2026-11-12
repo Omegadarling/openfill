@@ -258,7 +258,7 @@ class SettingsViews:
         for view in (self.models, self.engine, self.generation):
             view.pack(fill="x")
         if not bar.service.app.settings.remote_fibo:
-            ui.Button(bodies["engine"], "Save engine settings", self.save_engine, "accent").pack(
+            ui.Button(self.engine.managed, "Save engine settings", self.save_engine, "accent").pack(
                 anchor="w", pady=(10, 0)
             )
         self.load()
@@ -747,9 +747,25 @@ class EngineView(tk.Frame):
             browse.pack(side="left", padx=(8, 0))
             return row
 
-        box, _ = field(self, "ComfyUI folder", folder_row)
+        from .engine_view import EngineAssignments, ServerFinder
+
+        self.shared_engine = ui.frame(self)
+        ui.caption(self.shared_engine, "Shared engine").pack(anchor="w", pady=(12, 0))
+        self.source = ui.Select(self.shared_engine, CW, command=self.choose_source)
+        self.source.pack(anchor="w", pady=(6, 0))
+        self.source_url = ui.small(self.shared_engine, "")
+        self.source_url.pack(anchor="w", pady=(4, 0))
+        self.shared_engine.pack(fill="x")
+        if hasattr(bar.service, "routes"):
+            self.finder = ServerFinder(self, bar)
+            self.finder.pack(fill="x", pady=(8, 0))
+            self.assignments = EngineAssignments(self, bar)
+            self.assignments.pack(fill="x", pady=(4, 0))
+
+        self.managed = ui.frame(self)
+        box, _ = field(self.managed, "ComfyUI folder", folder_row)
         box.pack(fill="x", pady=(12, 0))
-        self.autostart = ui.Checkbox(self, "Start the AI engine with PhotoCraft")
+        self.autostart = ui.Checkbox(self.managed, "Start the AI engine with PhotoCraft")
         self.autostart.pack(anchor="w", pady=(12, 0))
 
         def idle_row(box):
@@ -759,62 +775,53 @@ class EngineView(tk.Frame):
             ui.small(row, "minutes, 0 = never", wrap=0).pack(side="left", padx=(8, 0))
             return row
 
-        box, _ = field(self, "Stop after idle", idle_row)
+        box, _ = field(self.managed, "Stop after idle", idle_row)
         box.pack(fill="x", pady=(12, 0))
-        box, self.extra = field(self, "Extra ComfyUI options", lambda b: ui.Field(b, CW, "for example --lowvram"))
+        box, self.extra = field(
+            self.managed, "Extra ComfyUI options", lambda b: ui.Field(b, CW, "for example --lowvram")
+        )
         box.pack(fill="x", pady=(12, 0))
-        ui.divider(self).pack(fill="x", pady=(12, 0))
-        tools = ui.frame(self)
-        tools.pack(fill="x", pady=(12, 0))
-        ui.caption(tools, "Engine").pack(anchor="w")
-        row = ui.frame(tools)
-        row.pack(anchor="w", pady=(8, 0))
-        for i, (label, command) in enumerate((("Check", self.check), ("Stop engine", self.stop), ("Logs", self.logs))):
-            ui.Button(row, label, command).pack(side="left", padx=(8 if i else 0, 0))
-        self.result = ui.small(tools, "")
-        if bar.service.app.settings.remote_fibo:
-            for child in self.winfo_children():
-                child.pack_forget()
-            from openfill.sources import list_sources
-
-            self.sources = {item["label"]: item["id"] for item in list_sources()}
-            self.shared_engine = ui.frame(self)
-            self.shared_engine.pack(fill="x")
-            ui.caption(self.shared_engine, "Shared engine").pack(anchor="w", pady=(12, 0))
-            self.source = ui.Select(self.shared_engine, CW, command=self.choose_source)
-            self.source.pack(anchor="w", pady=(8, 0))
-            self.source_url = ui.small(self.shared_engine, "")
-            self.source_url.pack(anchor="w", pady=(8, 0))
-            ui.small(
-                self.shared_engine,
-                "Select, Edit and Remove use this engine.",
-            ).pack(fill="x", pady=(8, 0))
-            row = ui.frame(self)
-            row.pack(anchor="w", pady=(12, 0))
-            ui.Button(row, "Check", self.check).pack(side="left")
-            ui.Button(row, "Logs", self.logs).pack(side="left", padx=(8, 0))
-            self.result = ui.small(self, "")
-        if hasattr(bar.service, "routes"):
-            from .engine_view import EngineAssignments
-
-            self.assignments = EngineAssignments(self, bar)
-            self.assignments.pack(fill="x", before=self.pack_slaves()[0])
+        self.tools = ui.frame(self)
+        self.tools.pack(fill="x", pady=(12, 0))
+        ui.Button(self.tools, "Check", self.check).pack(side="left")
+        self.stop_button = ui.Button(self.tools, "Stop engine", self.stop)
+        self.logs_button = ui.Button(self.tools, "Logs", self.logs)
+        self.logs_button.pack(side="left", padx=(8, 0))
+        self.result = ui.small(self, "")
         self.sync_source()
 
     def sync_source(self) -> None:
+        app = self.bar.service.app
         if hasattr(self, "assignments"):
             self.assignments.refresh()
-            if hasattr(self, "shared_engine"):
-                if self.bar.service.routes.enabled:
-                    self.shared_engine.pack_forget()
-                elif not self.shared_engine.winfo_manager():
-                    self.shared_engine.pack(fill="x", after=self.assignments)
-        if not hasattr(self, "source"):
-            return
-        app = self.bar.service.app
+            data = self.bar.service.routes.describe()
+            servers = data["servers"]
+            current, multi = data["sharedId"], data["enabled"]
+        else:
+            from openfill.sources import sources
+
+            servers = [{"id": s.id, "name": s.label, "address": s.address} for s in sources(app.settings.comfy_servers)]
+            current, multi = app.settings.fibo_source, False
+        self.sources = {s["name"]: s["id"] for s in servers}
+        selected = next((s for s in servers if s["id"] == current), None)
+        if multi:
+            self.shared_engine.pack_forget()
+        elif not self.shared_engine.winfo_manager():
+            self.shared_engine.pack(fill="x", before=self.pack_slaves()[0])
         self.source.set_values([] if self.bar.service.busy() else list(self.sources))
-        self.source.set(app.source_label())
-        self.source_url.configure(text=app.settings.url)
+        if selected:
+            self.source.set(selected["name"])
+            self.source_url.configure(text=selected["address"])
+        if current == "managed" or (not hasattr(self, "assignments") and not app.settings.remote_fibo):
+            if not self.managed.winfo_manager():
+                self.managed.pack(fill="x", before=self.tools)
+        else:
+            self.managed.pack_forget()
+        target = self.bar.service.app_for(self.bar.tab.get()) if hasattr(self, "assignments") else app
+        if target.settings.remote_fibo:
+            self.stop_button.pack_forget()
+        elif not self.stop_button.winfo_manager():
+            self.stop_button.pack(side="left", before=self.logs_button, padx=(8, 0))
 
     def choose_source(self, label: str) -> None:
         self.say(f"Connecting to {label}...", DIM)
@@ -854,7 +861,7 @@ class EngineView(tk.Frame):
         mode = bar.tab.get()
         self.say(
             "Checking the selected ComfyUI source..."
-            if bar.service.app.settings.remote_fibo
+            if bar.service.app_for(mode).settings.remote_fibo
             else "Checking the AI engine (starting it takes about a minute)...",
             DIM,
         )

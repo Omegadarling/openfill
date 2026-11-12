@@ -191,7 +191,10 @@ class Api:
         selected = self.service.app.settings.fibo_source
         return {
             "selected": selected,
-            "sources": [dict(item, name=item["label"], selected=item["id"] == selected) for item in list_sources()],
+            "sources": [
+                dict(item, name=item["label"], selected=item["id"] == selected)
+                for item in list_sources(self.service.app.settings.comfy_servers)
+            ],
         }
 
     # POST -----------------------------------------------------------------------------
@@ -301,6 +304,10 @@ class Api:
         if path == "/api/backend/check":
             health = svc.check_backend(body["mode"]) if "mode" in body else svc.check_backend()
             return {"ok": health.ok, "detail": health.detail, "device": getattr(health, "device", "")}
+        if path == "/api/servers/add":
+            return svc.add_server(body.get("name", ""), body.get("address", ""))
+        if path == "/api/servers/find":
+            return {"servers": svc.find_servers()}
         if path == "/api/backend/source":
             return svc.select_source(str(body["source"]))
         if path == "/api/backend/routing":

@@ -229,6 +229,16 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <button type="button" class="grip" draggable="true" aria-label="Reorder Engine" title="Drag to reorder, or use the Up and Down arrows">⠿</button>
     </div>
     <div id="body-engine" class="section-body stack" hidden>
+    <div class="stack">
+      <div style="display:flex;gap:8px"><button class="btn" id="find-servers">Find servers</button><button class="btn" id="add-server">Add server</button></div>
+      <div class="note dim" id="server-note" role="status" hidden></div>
+      <div class="stack" id="found-servers" hidden></div>
+      <form id="server-form" class="stack" hidden>
+        <label class="field"><span class="label">ComfyUI address</span><input id="server-address" required placeholder="studio.local:8188 or ssh://studio:8188"></label>
+        <label class="field"><span class="label">Name (optional)</span><input id="server-name" maxlength="100"></label>
+        <div style="display:flex;gap:8px"><button class="btn" type="submit">Save server</button><button type="button" class="btn" id="cancel-server">Cancel</button></div>
+      </form>
+    </div>
     <label class="check"><input type="checkbox" id="multi-engine"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span><span>Multi-engine</span></label>
     <div id="engine-assignments" class="stack" hidden>
       <label class="field"><span class="label">Select</span><select id="engine-select" aria-label="Select engine"></select></label>
@@ -906,11 +916,58 @@ function showVariations(job) {
   $("pick").hidden = names.length === 0;
 }
 const engineModes=["select","edit","remove"];
-let routing=null,routingBusy=false,sharedSources=null,stateSequence=0,lastState=0;
+let routing=null,routingBusy=false,stateSequence=0,lastState=0;
+function showServerForm(address="",name=""){
+  $("server-address").value=address;
+  $("server-name").value=name;
+  $("server-form").hidden=false;
+  $("server-address").focus();
+}
+$("add-server").onclick=()=>showServerForm();
+$("cancel-server").onclick=()=>{$("server-form").hidden=true};
+$("server-form").onsubmit=async event=>{
+  event.preventDefault();
+  const submit=event.currentTarget.querySelector('[type="submit"]');
+  submit.disabled=true;
+  try {
+    const row=await post("/api/servers/add",{name:$("server-name").value,address:$("server-address").value});
+    $("server-form").hidden=true;
+    $("found-servers").hidden=true;
+    settingsNote(row.name+" is saved. Choose it in an engine menu.","ok","server-note");
+    await tick();
+  } catch(e){settingsNote(e.message,"bad","server-note")} finally{submit.disabled=false}
+};
+$("find-servers").onclick=async()=>{
+  const list=$("found-servers");
+  list.replaceChildren();
+  list.hidden=true;
+  $("server-form").hidden=true;
+  $("find-servers").disabled=true;
+  settingsNote("Looking for ComfyUI on this computer and the LAN…","dim","server-note");
+  try {
+    const {servers}=await post("/api/servers/find",{});
+    settingsNote(servers.length?"ComfyUI servers that answered":"No servers answered. Use Add server for another port, an SSH connection, or an offline server.",servers.length?"ok":"dim","server-note");
+    for(const server of servers){
+      const line=document.createElement("div"), label=document.createElement("span");
+      label.textContent=server.name+(server.saved?" · saved":"");
+      line.append(label);
+      if(!server.saved){
+        const button=document.createElement("button");
+        button.className="btn";button.textContent="Add";button.style.marginLeft="8px";
+        button.onclick=()=>showServerForm(server.address,server.name);
+        line.append(button);
+      }
+      list.append(line);
+    }
+    list.hidden=!servers.length;
+  } catch(e){settingsNote(e.message,"bad","server-note")} finally{$("find-servers").disabled=false}
+};
 function syncRoutes(data,isBusy){
   if(!data)return;
   const changed=JSON.stringify(data)!==JSON.stringify(routing);
   routing=data;
+  if(changed)$("fibo-source").replaceChildren(...data.servers.map(src=>new Option(src.name,src.id)));
+  $("fibo-source").value=data.sharedId;
   $("multi-engine").checked=data.enabled;
   $("multi-engine").disabled=isBusy||routingBusy;
   $("engine-assignments").hidden=!data.enabled;
@@ -956,18 +1013,15 @@ async function tick(){
   lastState=seq;
   syncSavedGrow(s.selectionGrowPixels);
   if(!routingBusy)syncRoutes(s.engineRouting,s.busy);
-  if(s.sharedRemote&&!sharedSources){
-    sharedSources= get("/api/sources").then(data=>{
-      $("fibo-source").replaceChildren(...data.sources.map(src=>new Option(src.name,src.id)));
-      $("fibo-source").value=s.sharedSource;
-    }).catch(()=>{sharedSources=null});
-  }
-  $("shared-engine").hidden=!s.sharedRemote||Boolean(routing?.enabled);
-  $("fibo-source").value=s.sharedSource;$("fibo-source").disabled=s.busy;
-  $("source-detail").textContent=s.engineRouting?.shared||"";
+  $("shared-engine").hidden=Boolean(routing?.enabled);
+  $("fibo-source").disabled=s.busy;
+  const shared=routing?.servers.find(src=>src.id===routing.sharedId);
+  $("source-detail").textContent=shared?.address||"";
   $("token").closest(".stack").hidden=s.remoteFibo;
-  $("stop").hidden=s.remoteFibo;$("save-engine").hidden=s.sharedRemote;
-  Array.from($("sec-engine").children).slice(0,5).forEach(e=>e.hidden=s.sharedRemote);
+  $("stop").hidden=s.remoteFibo;
+  const managed=routing?.sharedId==="managed";
+  $("save-engine").hidden=!managed;
+  Array.from($("sec-engine").children).slice(0,5).forEach(e=>e.hidden=!managed);
   document.querySelectorAll("[data-legacy-generation]").forEach(e=>e.hidden=s.remoteFibo);
   $("fibo-edit-settings").hidden=!s.remoteFibo;
   $("remote-defaults").hidden=!s.remoteFibo;

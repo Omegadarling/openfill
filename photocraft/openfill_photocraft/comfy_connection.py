@@ -10,42 +10,48 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from openfill.comfy_api import ComfyClient
+from openfill.config import Paths, Settings
 from openfill.sources import get_source
 
+from .server_discovery import probe as comfy_version
+
 _connection_lock = threading.Lock()
+_owned = {}
 
 
 def ensure_connection(url: str, profile: Path, *, port: int = 8188, source_id: str | None = None):
-    """Open the configured loopback forward only if no existing tunnel serves it.
-
-    Uses the existing SSH alias and agent/key setup, in batch mode. An existing
-    tunnel belongs to its original owner; only a process created here is closed.
-    """
+    """Use a direct URL or a loopback forward owned by this companion for this exact SSH target."""
     with _connection_lock:
         return _ensure_connection(url, profile, port=port, source_id=source_id)
 
 
 def _ensure_connection(url: str, profile: Path, *, port: int, source_id: str | None):
-    source = get_source(source_id or "local")
+    saved = Settings.load(Paths.for_profile(profile).config, backup=False).comfy_servers
+    source = get_source(source_id or "local", saved)
     parsed = urlsplit(url)
     if source_id is not None:
         if url.rstrip("/") != source.url:
             raise RuntimeError(f"{source.label}'s connection must use {source.url}, not {url}.")
         port = parsed.port
-    if ComfyClient(url, timeout=3).is_alive():
-        return None
     if source.ssh_alias is None:
+        if comfy_version(url, timeout=3) is not None:
+            return None
         raise RuntimeError(
-            f"ComfyUI on {source.label} is not answering at {url}. Start its existing ComfyUI, then use Engine > Check."
+            f"ComfyUI on {source.label} is not answering at {url}. Start ComfyUI and use Engine > Check."
         )
+    target = (source.ssh_alias, source.remote_port)
+    existing = _owned.get(port)
+    if existing and existing[1].poll() is None and existing[0] == target:
+        if comfy_version(url, timeout=3) is not None:
+            return existing[1]
+        raise RuntimeError(f"The SSH connection to {source.label} is open. Start ComfyUI there and use Engine > Check.")
     if parsed.hostname not in ("127.0.0.1", "localhost") or parsed.port != port:
         raise RuntimeError(f"ComfyUI on {source.label} is not answering at {url}; check its server connection.")
     with socket.socket() as probe:
         probe.settimeout(0.5)
         if probe.connect_ex(("127.0.0.1", port)) == 0:
             raise RuntimeError(
-                f"Port {port} is occupied but {source.label} ComfyUI is not answering. Check the existing SSH connection."
+                f"Port {port} is already in use. Close the conflicting forward or add its local HTTP address explicitly."
             )
     profile.mkdir(parents=True, exist_ok=True)
     log_name = f"{source.id}-ssh.log"
@@ -58,6 +64,8 @@ def _ensure_connection(url: str, profile: Path, *, port: int, source_id: str | N
                 "BatchMode=yes",
                 "-o",
                 "ConnectTimeout=8",
+                "-o",
+                "StrictHostKeyChecking=yes",
                 "-o",
                 "ExitOnForwardFailure=yes",
                 "-o",
@@ -85,7 +93,8 @@ def _ensure_connection(url: str, profile: Path, *, port: int, source_id: str | N
     atexit.register(stop_owned_tunnel)
     until = time.monotonic() + 15
     while time.monotonic() < until and child.poll() is None:
-        if ComfyClient(url, timeout=2).is_alive():
+        if comfy_version(url, timeout=2) is not None and child.poll() is None:
+            _owned[port] = (target, child)
             return child
         time.sleep(0.25)
     stop_owned_tunnel()

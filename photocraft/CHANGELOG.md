@@ -5,6 +5,12 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-11-12
+
+- Use **Engine → Find servers** to find running ComfyUI instances, or **Add server** to save an HTTP(S) address or a trusted SSH alias.
+- Named servers are available in the shared engine picker and the Select, Edit, and Remove assignments in both panels. OpenFill remembers them between sessions.
+- macOS upgrades preserve an existing native OpenFill launcher and its Local Network permission.
+
 ## [0.18.2] - 2026-11-10
 
 - The native Select panel now reserves space for the Grow slider and pixel field at its standard width. You can click into the field, type the amount, and apply it with Enter.

@@ -35,7 +35,7 @@ HUB_SELECTED_FILENAME = "hub-selected.json"
 
 PANEL_SECTIONS = ("edit", "references", "models", "engine", "generation")
 DEFAULT_COLLAPSED = ("models", "engine", "generation")
-_SAVE_LOCK = threading.Lock()
+_SAVE_LOCK = threading.RLock()
 
 
 def normalize_panel_layout(value: Any) -> dict[str, list[str]]:
@@ -143,7 +143,8 @@ class Settings:
 
     backend: str = "comfyui"  # "comfyui" or "a1111"
     remote_fibo: bool = False  # existing remote ComfyUI, including SSH loopback tunnels
-    fibo_source: str = "local"  # fixed backend in sources.py; no fallback to another host
+    fibo_source: str = "local"  # an existing ComfyUI server ID
+    comfy_servers: list[dict] = field(default_factory=list)
     comfy_dir: str = field(default_factory=default_comfy_dir)
     url: str = "http://127.0.0.1:8188"  # ComfyUI (or A1111) base URL
     a1111_url: str = "http://127.0.0.1:7860"
@@ -262,6 +263,9 @@ class Settings:
                 try:
                     if key == "panel_layout":
                         settings.panel_layout = normalize_panel_layout(value)
+                    elif key == "comfy_servers":
+                        if isinstance(value, list):
+                            settings.comfy_servers = value
                     elif key == "hidden_models":
                         settings.hidden_models = normalize_hidden_models(value)
                     else:
@@ -322,6 +326,16 @@ class Settings:
         self.cpu_comfy_dir = ""
         return True
 
+    def save_server(self, path: Path, source: dict) -> None:
+        with _SAVE_LOCK:
+            old = self.comfy_servers
+            self.comfy_servers = [*old, source]
+            try:
+                self.save(path)
+            except OSError:
+                self.comfy_servers = old
+                raise
+
     def save(self, path: Path) -> None:
         """Write atomically (temporary file, then rename); owner-only permissions on POSIX."""
         path = Path(path)
@@ -350,7 +364,7 @@ class Settings:
         if self.remote_fibo:
             from .sources import get_source
 
-            return get_source(self.fibo_source).url
+            return get_source(self.fibo_source, self.comfy_servers).url
         return self.a1111_url if self.backend == "a1111" else self.url
 
     def model_for(self, quality: str | None = None) -> ModelSpec:

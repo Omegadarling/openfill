@@ -140,7 +140,9 @@ class Service:
         bridge.on_region = self._region
         self.app = App(interactive=True, io=bridge, runner_cls=WebRunner)
         self.app.job_state = self.state
-        self._find_comfy()
+        self.routes = EngineRoutes(self.app, bridge.profile)
+        if not self.routes.app_for("edit").settings.remote_fibo:
+            self._find_comfy()
         # ComfyUI stops when this companion ends (it is what the backend serves).
         import os
 
@@ -148,10 +150,10 @@ class Service:
         self.app.server.watch_name = process_name(os.getpid()) or "python"
         self._thread: threading.Thread | None = None
         self._operation_lock = threading.Lock()
+        self._discovery_lock = threading.Lock()
         self.references = ReferenceImages()
         self.advice_sampler = SelectionSampler(client)
         self.selection = Selection(bridge)
-        self.routes = EngineRoutes(self.app, bridge.profile)
         self._job_app = self.app
         self._switching = False
         self.watcher = None  # menu.Watcher, set by the launcher: keeps the document's facts current
@@ -221,8 +223,8 @@ class Service:
         when it is set up and a model is there to use)."""
         from openfill.config import comfy_layout
 
-        app = self.app
-        if comfy_layout(app.settings.comfy_dir) is None or not app.settings.autostart:
+        app = self.app_for("edit")
+        if app.settings.remote_fibo or comfy_layout(app.settings.comfy_dir) is None or not app.settings.autostart:
             return
         if not (app.has_model_for("fill") or app.has_model_for("remove")):
             return
@@ -314,6 +316,21 @@ class Service:
         finally:
             self._operation_lock.release()
 
+    def add_server(self, name, address):
+        with self._operation_lock:
+            source = self.routes.add_server(name, address)
+        return {"id": source.id, "name": source.label, "address": source.address}
+
+    def find_servers(self):
+        from .server_discovery import discover
+
+        if not self._discovery_lock.acquire(blocking=False):
+            raise RuntimeError("A server search is already running.")
+        try:
+            return discover(tuple(self.routes.sources.values()))
+        finally:
+            self._discovery_lock.release()
+
     def select_source(self, source_id: str) -> dict[str, Any]:
         """Change destinations only between edits, including the connection check."""
         if not self._operation_lock.acquire(blocking=False):
@@ -322,12 +339,17 @@ class Service:
             if self.busy():
                 raise RuntimeError("Wait for the current edit to finish before changing its source.")
             self._switching = True
-            source = self.app.select_source(source_id)
+            if self.app.settings.remote_fibo:
+                source = self.app.select_source(source_id)
+                target, name = self.app, source.label
+            else:
+                target = self.routes.select_shared(source_id)
+                name = self.routes.describe()["shared"]
             self.engine = ""
-            health = self.app.check_backend()
+            health = target.check_backend()
             return {
-                "source": source.id,
-                "name": source.label,
+                "source": source_id,
+                "name": name,
                 "ok": health.ok,
                 "detail": health.detail,
                 "device": getattr(health, "device", ""),

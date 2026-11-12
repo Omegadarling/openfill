@@ -118,7 +118,7 @@ class App:
         if self.settings.remote_fibo:
             self.settings.autostart = False
             self.settings.backend = "comfyui"
-            self.settings.url = get_source(self.settings.fibo_source).url
+            self.settings.url = get_source(self.settings.fibo_source, self.settings.comfy_servers).url
         self.log = get_logger(self.paths.log, debug=self.settings.debug)
         if self.settings.load_problem:
             self.log.warning("settings: %s", self.settings.load_problem)
@@ -166,7 +166,7 @@ class App:
     # backend -------------------------------------------------------------
 
     def source_label(self) -> str:
-        return get_source(self.settings.fibo_source).label
+        return get_source(self.settings.fibo_source, self.settings.comfy_servers).label
 
     def select_source(self, source_id: str) -> Source:
         """Persist a source and discard old-host state; the caller guards active operations.
@@ -177,7 +177,7 @@ class App:
         """
         if not self.settings.remote_fibo:
             raise BackendError("Backend source selection is only available in remote edit mode.")
-        source = get_source(source_id)
+        source = get_source(source_id, self.settings.comfy_servers)
         from .remote_models import RemoteModels
 
         with self._source_lock:
@@ -741,7 +741,7 @@ class App:
             if self.settings.remote_fibo:
                 from .remote_models import RemoteModels
 
-                source = get_source(self.settings.fibo_source)
+                source = get_source(self.settings.fibo_source, self.settings.comfy_servers)
                 self.settings.autostart = False
                 self.settings.backend = "comfyui"
                 self.settings.url = source.url

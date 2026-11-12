@@ -119,6 +119,28 @@ class InlinePanelTests(unittest.TestCase):
         ui.FONTS = None
         root.destroy()
 
+    def test_engine_finder_saves_into_both_native_pickers(self):
+        panel = self.bar.settings_view.engine
+        finder = panel.finder
+        routes = self.service.routes
+
+        def add(name, address):
+            source = routes.add_server(name, address)
+            return {"id": source.id, "name": source.label, "address": source.address}
+
+        self.service.add_server.side_effect = add
+        finder.show_results([{"address": "http://studio.local:8190", "name": "studio.local:8190", "saved": False}])
+        add_button = next(w for w in finder.results.winfo_children()[0].winfo_children() if isinstance(w, ui.Button))
+        add_button.invoke()
+        self.assertEqual(finder.address.get(), "http://studio.local:8190")
+        finder.name.set("Room two")
+        finder.save()
+        self.assertIn("Room two", panel.source.values)
+        self.assertIn("Room two", panel.assignments.pickers["edit"].values)
+        self.assertEqual(self.api.sources()["sources"][-1]["name"], "Room two")
+        self.assertEqual(Settings.load(self.service.app.paths.config).comfy_servers[0]["label"], "Room two")
+        self.assertEqual(finder.form.winfo_manager(), "")
+
     def test_grow_number_and_slider_fit_at_the_native_panel_width(self):
         view = self.bar.select_view_panel
         row = view.grow.master

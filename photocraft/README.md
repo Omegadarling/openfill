@@ -14,6 +14,12 @@ Use **Add** to include another object or **Subtract** to take one out. To expand
 
 **AI setup:** use a ComfyUI build with the built-in [WeVisOne-VL Detect node](https://github.com/Comfy-Org/ComfyUI/pull/17632). Put one of the [Comfy-Org WeVisOne-VL encoders](https://huggingface.co/Comfy-Org/WeVisOne-VL/tree/135355350443103e34089dd39264fe0651691929/text_encoders) in that server's `models/text_encoders` folder. Use the ComfyUI conversion, which includes the mask decoder. The 4B BF16 file is 9.7 GB; 2B and INT8 files are also supported. OpenFill discovers the file by its loader name. These weights are optional and are not part of the OpenFill download.
 
+## Find or add a ComfyUI server
+
+Open **Engine → Find servers** to check this computer and the nearby IPv4 LAN for running ComfyUI servers on ports 8188 and 8000. The finder also checks each saved address on its configured port. Choose **Add** beside a result, give it a name, and click **Save server**. Choose it from **Shared engine**, or use **Multi-engine** to assign it to one mode. The native and browser panels share the saved list.
+
+**Engine → Add server** also accepts a hostname and port, a full HTTP(S) address, or an existing SSH alias such as `ssh://studio:8188`. For SSH, use an alias that already connects with your key and whose host key you trust. The port in the address is the ComfyUI port on that computer. An offline server can be saved and checked when it comes online. On a managed installation, choosing **Managed ComfyUI** returns to the previous local setup.
+
 ## Use a different engine for each mode
 
 By default **Select**, **Edit** and **Remove** share the configured engine. Open **Engine**, check **Multi-engine**, and choose a ComfyUI server for each mode. Choose **Other ComfyUI URL…** to enter another server address or a local forwarded port. Two modes can share a server. Assignments save immediately and are remembered when you turn Multi-engine back on. **Check** tests the engine for the current mode.
@@ -24,19 +30,9 @@ An existing `selection-engine.json` adds **Local WeVisOne** to the Select picker
 
 ## Edit with an existing ComfyUI
 
-1. Install the [compatible model files](#existing-server-models) on the computer running ComfyUI. For the same computer as PhotoCraft, start ComfyUI on `127.0.0.1:8188`. For another computer, [open an SSH tunnel](#connect-to-comfyui-on-your-lan) before launching OpenFill.
-2. Open **PhotoCraft with OpenFill** once to create the profile, then close it. In the profile’s `openfill/config.json`, set `"remote_fibo": true` and `"fibo_source": "local"`, keeping the other settings. If the file is missing, create the `openfill` folder inside the profile and save this as `config.json`. See [Good to know](#good-to-know) for the profile location.
-
-   ```json
-   {
-     "remote_fibo": true,
-     "fibo_source": "local"
-   }
-   ```
-
-3. Reopen **PhotoCraft with OpenFill**. In **Engine**, use **Local ComfyUI** and press **Check**. This source uses `127.0.0.1:8188` for both a local server and a tunnel. Select the area to edit and choose a model in **Edit**. Use **Select All** when you want the edit to cover the whole image.
-
-If the connection succeeds and your model is missing, check that the server sees the required files and nodes and that the model is enabled in **Manage Models**. To return to the managed engine and its Fill, Remove, Expand, and Create modes, set `"remote_fibo": false` while the companion is closed.
+1. Start ComfyUI on the computer with the [compatible model files](#existing-server-models).
+2. Open **Engine** in PhotoCraft with OpenFill and select your server under **Shared engine**. If it is missing, use **Find servers** or **Add server**. Click **Check** in Edit.
+3. Select the area to edit and choose a model in **Edit**. Use **Select All** to edit the whole image. If a model is missing, check its files and nodes on that server and its visibility in **Manage Models**.
 
 ### Remove an object
 
@@ -72,18 +68,9 @@ Qwen removal uses the four-step Lightning model described above with the origina
 
 ### Connect to ComfyUI on your LAN
 
-1. On the ComfyUI computer, start ComfyUI on `127.0.0.1:8188`. That computer needs a running SSH server that accepts your login and allows local port forwarding. Keep ComfyUI bound to loopback.
-2. On the **PhotoCraft computer**, open a terminal and run the command below. Replace `your-user` with your SSH account and `192.168.1.50` with the ComfyUI computer’s LAN IP address or hostname. Leave the terminal open while you work.
+For a server that already accepts LAN connections, enter its address in **Engine → Add server**. For a server bound to its own loopback interface, enter an existing SSH alias such as `ssh://studio:8188`. OpenFill opens the local forward when you connect. Each saved SSH server gets its own local port.
 
-   ```sh
-   ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8188:127.0.0.1:8188 your-user@192.168.1.50
-   ```
-
-3. On the PhotoCraft computer, open `http://127.0.0.1:8188/system_stats` in a browser. A JSON response confirms that ComfyUI answers through the tunnel. Launch OpenFill with the existing-server settings above, keep **Local ComfyUI** selected, and use **Engine → Check**.
-
-The public build uses local port `8188` for this connection. If another local ComfyUI or tunnel is using it, free that port before opening the new tunnel. If ComfyUI uses a different port on the other computer, change the last `8188` in the `-L` argument. Press Ctrl+C in the SSH terminal to disconnect after your edits finish. The server processes the image data, mask, prompt, and references you send for the job. [OpenSSH port forwarding](https://man.openbsd.org/ssh#L) · [ComfyUI server routes](https://docs.comfy.org/development/comfyui-server/comms_routes)
-
-Custom builds can register additional named backends in [`sources.py`](https://github.com/Omegadarling/openfill/blob/main/gimp-openfill/openfill/sources.py) and use their registered IDs in `fibo_source`.
+If you already maintain an SSH tunnel yourself, save its local HTTP address in **Add server**. The ComfyUI server you choose processes the image, mask, prompt and references for the job. [OpenSSH port forwarding](https://man.openbsd.org/ssh#L) · [ComfyUI server routes](https://docs.comfy.org/development/comfyui-server/comms_routes)
 
 ## Existing-server models
 

@@ -1005,6 +1005,38 @@ class MacInstallTests(unittest.TestCase):
                 self.assertFalse((home / "app").exists())
                 self.assertEqual(config.read_text(), "keep settings")
 
+    def test_upgrade_preserves_the_native_mac_launcher_and_its_permissions(self):
+        import plistlib
+
+        from openfill_photocraft import install
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            bundle = root / "PhotoCraft with OpenFill.app"
+            executable = bundle / "Contents/MacOS/openfill-photocraft"
+            executable.parent.mkdir(parents=True)
+            native = bytes.fromhex("cffaedfe") + b"test-launcher"
+            executable.write_bytes(native)
+            info = plistlib.dumps(
+                {
+                    "CFBundleIdentifier": install.MAC_BUNDLE_ID,
+                    "CFBundleExecutable": executable.name,
+                    "NSLocalNetworkUsageDescription": "Existing local access",
+                }
+            )
+            plist = bundle / "Contents/Info.plist"
+            plist.write_bytes(info)
+            with (
+                mock.patch.object(install, "mac_app", return_value=bundle),
+                mock.patch.object(install, "mac_home", return_value=root / "data"),
+                mock.patch.object(install, "copy_app") as copy,
+                mock.patch.object(launch, "find_photocraft", return_value=["PhotoCraft"]),
+            ):
+                self.assertEqual(install.install_mac(sys.executable), 0)
+                copy.assert_called_once()
+            self.assertEqual(executable.read_bytes(), native)
+            self.assertEqual(plist.read_bytes(), info)
+
     def test_unrelated_app_is_not_replaced(self):
         from openfill_photocraft import install
 

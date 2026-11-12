@@ -187,13 +187,23 @@ class ServerManager:
     def ensure_running(self, progress: ProgressCallback | None = None, cancel: Callable[[], bool] | None = None) -> str:
         """Return a healthy base URL, starting the backend if allowed."""
         url = self.url()
+        if self.settings.remote_fibo:
+            from .sources import get_source
+
+            source = get_source(self.settings.fibo_source, self.settings.comfy_servers)
+            if source.ssh_alias:
+                from openfill_photocraft.comfy_connection import ensure_connection
+
+                try:
+                    ensure_connection(url, self.paths.base.parent, source_id=source.id)
+                except (OSError, RuntimeError) as err:
+                    raise BackendUnavailable(str(err)) from err
+                return url
         if self.is_healthy(url):
             self.touch()
             return url
         if self.settings.remote_fibo:
-            from .sources import get_source
-
-            label = get_source(self.settings.fibo_source).label
+            label = source.label
             raise BackendUnavailable(
                 f"{label} is not answering at {url}. Start ComfyUI on {label}, then use Engine > Check."
             )
@@ -214,7 +224,9 @@ class ServerManager:
         if self.settings.remote_fibo:
             from .sources import get_source
 
-            raise BackendUnavailable(f"ComfyUI is managed separately on {get_source(self.settings.fibo_source).label}.")
+            raise BackendUnavailable(
+                f"ComfyUI is managed separately on {get_source(self.settings.fibo_source, self.settings.comfy_servers).label}."
+            )
         layout = comfy_layout(self.settings.comfy_dir)
         if layout is None:
             raise BackendUnavailable(

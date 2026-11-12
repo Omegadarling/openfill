@@ -42,13 +42,7 @@ Results always go on new layers, in one undo step, so your existing layers are n
 
 The managed engine runs ComfyUI locally for Fill, Remove, Expand, and Create. **Image Edit** connects to a ComfyUI server you run yourself, either on the PhotoCraft computer or on another computer on your LAN.
 
-For a LAN server, start ComfyUI on that computer and run this in a terminal on the PhotoCraft computer. Replace `your-user` and `192.168.1.50` with your SSH username and the ComfyUI computer’s LAN address.
-
-```sh
-ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8188:127.0.0.1:8188 your-user@192.168.1.50
-```
-
-Leave the tunnel open. Enable existing-server mode and choose **Local ComfyUI** in OpenFill. It connects through `127.0.0.1:8188`, and the tunnel carries the edit to the other computer. [LAN setup and connection checks](photocraft/README.md#connect-to-comfyui-on-your-lan) · [Existing-server settings](photocraft/README.md#edit-with-an-existing-comfyui)
+Start ComfyUI on the server, then open **Engine → Find servers** in PhotoCraft. Choose a result, give it a name, and select it under **Shared engine**. Use **Add server** for a custom address or a trusted SSH alias such as `ssh://studio:8188`. Both panels remember your servers. Models for remote jobs stay on the selected server. [Find or add a ComfyUI server](photocraft/README.md#find-or-add-a-comfyui-server)
 
 ## Install
 

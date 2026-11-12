@@ -445,6 +445,17 @@ def mac_python_command(python: str) -> str:
     return shlex.quote(python)
 
 
+def native_mac_launcher(executable: Path) -> bool:
+    """An owned native app keeps its signature and macOS Local Network permission on upgrade."""
+    try:
+        with executable.open("rb") as file:
+            magic = file.read(4)
+    except FileNotFoundError:
+        return False
+    # 64-bit Mach-O (thin and universal binaries, either byte order).
+    return magic.hex() in {"feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"}
+
+
 def install_mac(python: str) -> int:
     from openfill_photocraft.__main__ import find_photocraft
 
@@ -463,26 +474,28 @@ def install_mac(python: str) -> int:
     copy_app(app)
     contents = bundle / "Contents"
     executable = contents / "MacOS" / "openfill-photocraft"
-    executable.parent.mkdir(parents=True, exist_ok=True)
-    executable.write_text(
-        "#!/bin/sh\n"
-        f"export PYTHONPATH={shlex.quote(str(app))}\n"
-        f'exec {mac_python_command(python)} -m openfill_photocraft "$@"\n',
-        encoding="utf-8",
-    )
-    executable.chmod(0o755)
-    (contents / "Info.plist").write_bytes(
-        plistlib.dumps(
-            {
-                "CFBundleIdentifier": MAC_BUNDLE_ID,
-                "CFBundleName": "PhotoCraft with OpenFill",
-                "CFBundleExecutable": executable.name,
-                "CFBundlePackageType": "APPL",
-                "CFBundleVersion": "1",
-                "NSHighResolutionCapable": True,
-            }
+    if not native_mac_launcher(executable):
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text(
+            "#!/bin/sh\n"
+            f"export PYTHONPATH={shlex.quote(str(app))}\n"
+            f'exec {mac_python_command(python)} -m openfill_photocraft "$@"\n',
+            encoding="utf-8",
         )
-    )
+        executable.chmod(0o755)
+        (contents / "Info.plist").write_bytes(
+            plistlib.dumps(
+                {
+                    "CFBundleIdentifier": MAC_BUNDLE_ID,
+                    "CFBundleName": "PhotoCraft with OpenFill",
+                    "CFBundleExecutable": executable.name,
+                    "CFBundlePackageType": "APPL",
+                    "CFBundleVersion": "1",
+                    "NSHighResolutionCapable": True,
+                    "NSLocalNetworkUsageDescription": "Find and connect to your ComfyUI servers on the local network.",
+                }
+            )
+        )
     uninstall_contents = uninstaller / "Contents"
     uninstall_executable = uninstall_contents / "MacOS" / "openfill-uninstall"
     uninstall_executable.parent.mkdir(parents=True, exist_ok=True)

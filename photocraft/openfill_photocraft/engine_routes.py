@@ -8,6 +8,7 @@ import json
 import os
 import tempfile
 import threading
+from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -17,13 +18,14 @@ from openfill.comfy_api import ComfyClient
 from openfill.config import Paths
 from openfill.remote_models import RemoteModels
 from openfill.server import ServerManager
-from openfill.sources import Source, list_sources
+from openfill.sources import Source, new_source, sources
 
 from .comfy_connection import ensure_connection
 
 MODES = ("select", "edit", "remove")
 SHARED = "shared"
 HELPER = "selection-helper"
+MANAGED = "managed"
 
 
 def mode_for(tool, removing=False):
@@ -141,6 +143,8 @@ class RoutedApp(App):
             backend = self.backend()
             health = backend.health()
             self.refresh_remote_models(force=True)
+            if health.ok and not self.catalog:
+                return HealthStatus(False, self.remote_models.error)
             return health
         except Exception as err:
             return HealthStatus(False, str(err))
@@ -152,7 +156,7 @@ class EngineRoutes:
         self.path = self.profile / "engine-routing.json"
         self.lock = threading.RLock()
         self.sessions = {}
-        self.sources = {s["id"]: Source(**s) for s in list_sources()}
+        self.managed_shared = MANAGED
         self.helper_config = self.profile / "selection-engine.json"
         self.enabled = False
         self.routes = dict.fromkeys(MODES, SHARED)
@@ -162,9 +166,41 @@ class EngineRoutes:
             try:
                 saved = json.loads(self.path.read_text(encoding="utf-8-sig"))
                 self._validate(saved["enabled"], saved["routes"])
-                self.enabled, self.routes = saved["enabled"], saved["routes"]
+                shared = saved.get("shared", MANAGED)
+                if shared != MANAGED and shared not in self.sources:
+                    raise ValueError("The saved shared server is unknown.")
+                self.enabled, self.routes, self.managed_shared = saved["enabled"], saved["routes"], shared
             except (KeyError, ValueError, TypeError, OSError) as err:
                 base.log.warning("Could not read engine assignments: %s", err)
+
+    @property
+    def sources(self):
+        return {s.id: s for s in sources(self.base.settings.comfy_servers)}
+
+    def add_server(self, name, address):
+        with self.lock:
+            existing = tuple(self.sources.values())
+            source = new_source(name, address, existing)
+            if source not in existing:
+                settings = self.base.settings
+                settings.save_server(self.base.paths.config, asdict(source))
+            return source
+
+    @property
+    def shared_id(self):
+        return self.base.settings.fibo_source if self.base.settings.remote_fibo else self.managed_shared
+
+    def select_shared(self, key):
+        """A managed profile can use an external shared engine and return to its original setup."""
+        with self.lock:
+            if key != MANAGED and key not in self.sources:
+                raise ValueError("Choose a saved ComfyUI server.")
+            self._write(self.enabled, self.routes, key)
+            self.managed_shared = key
+            return self._app_for_key(key, "edit")
+
+    def _write(self, enabled, routes, shared):
+        write_json(self.path, {"enabled": enabled, "routes": routes, "shared": shared})
 
     def _source(self, key, mode):
         if key == SHARED:
@@ -193,32 +229,46 @@ class EngineRoutes:
             for mode, key in routes.items():
                 source = self._source(key, mode)
                 cleaned[mode] = source.id if source else SHARED
-            write_json(self.path, {"enabled": enabled, "routes": cleaned})
+            self._write(enabled, cleaned, self.managed_shared)
             self.enabled, self.routes = enabled, cleaned
             return self.describe()
 
     def describe(self):
         with self.lock:
-            shared = self.base.source_label() if self.base.settings.remote_fibo else "Configured engine"
+            registered = self.sources
+            shared_id = self.shared_id
+            shared = "Managed ComfyUI" if shared_id == MANAGED else registered[shared_id].label
+            servers = [{"id": s.id, "name": s.label, "address": s.address} for s in registered.values()]
+            if not self.base.settings.remote_fibo:
+                servers.insert(0, {"id": MANAGED, "name": "Managed ComfyUI", "address": ""})
             choices = [{"id": SHARED, "name": f"Shared · {shared}", "modes": MODES}]
-            choices.extend({"id": s.id, "name": s.label, "modes": MODES} for s in self.sources.values())
+            choices.extend({"id": s.id, "name": s.label, "modes": MODES} for s in registered.values())
             if self.helper_config.is_file():
                 choices.append({"id": HELPER, "name": "Local WeVisOne", "modes": ["select"]})
             for key in dict.fromkeys(self.routes.values()):
-                if key not in (*self.sources, HELPER, SHARED):
+                if key not in (*registered, HELPER, SHARED):
                     choices.append({"id": key, "name": custom_source(key).label, "modes": MODES})
-            return {"enabled": self.enabled, "routes": dict(self.routes), "choices": choices, "shared": shared}
+            return {
+                "enabled": self.enabled,
+                "routes": dict(self.routes),
+                "choices": choices,
+                "shared": shared,
+                "sharedId": shared_id,
+                "servers": servers,
+            }
 
     def app_for(self, tool):
         with self.lock:
             mode = mode_for(tool)
             key = self.routes[mode] if self.enabled else SHARED
-            if key == SHARED or (self.base.settings.remote_fibo and key == self.base.settings.fibo_source):
-                return self.base
-            source = self._source(key, mode)
-            if source.id not in self.sessions:
-                self.sessions[source.id] = RoutedApp(self.base, source, self.profile)
-            app = self.sessions[source.id]
-            # The shared settings object may be replaced by Reload settings.
-            app.settings.base = self.base.settings
-            return app
+            return self._app_for_key(self.shared_id if key == SHARED else key, mode)
+
+    def _app_for_key(self, key, mode):
+        if key == MANAGED or (self.base.settings.remote_fibo and key == self.base.settings.fibo_source):
+            return self.base
+        source = self._source(key, mode)
+        if source.id not in self.sessions:
+            self.sessions[source.id] = RoutedApp(self.base, source, self.profile)
+        app = self.sessions[source.id]
+        app.settings.base = self.base.settings
+        return app
