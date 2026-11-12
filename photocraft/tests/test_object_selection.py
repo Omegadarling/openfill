@@ -18,6 +18,40 @@ from openfill_photocraft.wevisone import WeVisOne, choose_box_matte, choose_matt
 
 
 class SelectionTests(unittest.TestCase):
+    def test_manual_selection_strokes_refresh_without_scratch_tabs_and_pixel_edits_reload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = Mock(profile=Path(directory))
+            doc = dict(
+                name="Image",
+                width=40,
+                height=30,
+                revision=1,
+                activeLayer=1,
+                history=["Open"],
+                hasSelection=True,
+                selectionBounds=[0, 0, 20, 20],
+            )
+            bridge.client.call.side_effect = lambda method, **_: {"session": {"active": 0}, "document": doc}
+            bridge._read.return_value = Image.new("RGBA", (40, 30), "white")
+            selection = Selection(bridge)
+            initial = selection.capture(key_for(0, doc))
+            selection.matte_key, selection.matte = key_for(0, doc), Image.new("L", (40, 30), 255)
+            for step in ("Quick Selection", "Lasso", "Rectangular Marquee"):
+                doc.update(revision=doc["revision"] + 1, history=[*doc["history"], step])
+                current = selection.capture(key_for(0, doc))
+                self.assertFalse(current["maskShown"])
+                self.assertEqual(current["image"], initial["image"])
+                self.assertNotEqual(current["key"], initial["key"])
+            bridge._read.assert_called_once()
+            bridge._snapshot.assert_not_called()
+            bridge.client.run.assert_not_called()
+            doc.update(revision=5, history=[*doc["history"], "Brush Tool"])
+            bridge._read.return_value = Image.new("RGBA", (40, 30), "blue")
+            self.assertNotEqual(selection.capture(key_for(0, doc))["image"], initial["image"])
+            bridge._snapshot.return_value = (bridge._read.return_value, Image.new("L", (40, 30), 127))
+            self.assertTrue(selection.capture(key_for(0, doc), show_mask=True)["maskShown"])
+            bridge._snapshot.assert_called_once()
+
     def test_grow_remembers_the_exact_radius_after_one_successful_document_edit(self):
         doc = dict(name="Mask", revision=1, width=1600, height=1200, activeLayer=1, hasSelection=True)
         with tempfile.TemporaryDirectory() as directory:

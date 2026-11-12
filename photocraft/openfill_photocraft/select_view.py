@@ -8,6 +8,7 @@ import io
 import threading
 import time
 import tkinter as tk
+from tkinter import ttk
 
 from PIL import Image
 
@@ -17,11 +18,65 @@ from .selection import MAX_GROW_PIXELS, saved_grow_pixels, valid_grow_pixels
 QUICK_GROW_PIXELS = 64
 
 
+def grow_slider(parent, variable, maximum):
+    """Use Tk's scale gestures with PhotoCraft's dark-theme track and round handle."""
+    from PIL import ImageDraw
+
+    style = ttk.Style(parent)
+    name = "OpenFill.Horizontal.TScale"
+    if "OpenFill.slider" not in style.element_names():
+        knob = Image.new("RGBA", (20 * ui.SS, 20 * ui.SS))
+        draw = ImageDraw.Draw(knob)
+        draw.ellipse((3 * ui.SS, 4 * ui.SS, 17 * ui.SS, 18 * ui.SS), fill=(0, 0, 0, 90))
+        draw.ellipse((4 * ui.SS, 4 * ui.SS, 16 * ui.SS, 16 * ui.SS), fill="#ececec", outline="#282828", width=ui.SS)
+        grip = ui.photo(knob.resize((20, 20), Image.Resampling.LANCZOS))
+        draw.ellipse((0, 0, 20 * ui.SS - 1, 20 * ui.SS - 1), outline=ui.DIM, width=ui.SS)
+        focused = ui.photo(knob.resize((20, 20), Image.Resampling.LANCZOS))
+        track = tk.PhotoImage(master=parent, width=21, height=22)
+        track.put(ui.BG, to=(0, 0, 21, 22))
+        track.put("#4a4a4a", to=(9, 10, 12, 13))
+        # ttk retains image names; keep their Python owners for the lifetime of this Tk interpreter.
+        parent._root()._openfill_grow_images = (track, grip, focused)
+        style.element_create("OpenFill.trough", "image", track, border=(10, 0), sticky="ew")
+        style.element_create("OpenFill.slider", "image", grip, ("focus", focused), ("active", focused))
+        style.layout(
+            name,
+            [
+                (
+                    "OpenFill.trough",
+                    {
+                        "sticky": "ew",
+                        "children": [
+                            ("OpenFill.slider", {"side": "left", "sticky": ""}),
+                        ],
+                    },
+                )
+            ],
+        )
+    scale = ttk.Scale(parent, style=name, from_=1, to=maximum, orient="horizontal", takefocus=True)
+
+    def from_slider(value):
+        pixels = round(float(value))
+        if variable.get() != pixels:
+            variable.set(pixels)
+
+    def from_number(*_):
+        if round(scale.get()) != variable.get():
+            scale.set(variable.get())
+
+    scale.configure(command=from_slider)
+    variable.trace_add("write", from_number)
+    scale.set(variable.get())
+    return scale
+
+
 class SelectView(tk.Frame):
     def __init__(self, bar, parent):
         super().__init__(parent, bg=ui.BG)
         self.bar = bar
         self.key = self.loading = ""
+        self.mask_shown = False
+        self.document = None
         self.retry_at = 0.0
         self.photo, self.rect = None, None
         self.drag_start = None
@@ -34,7 +89,7 @@ class SelectView(tk.Frame):
         self.syncing_grow = False
         ui.small(
             self,
-            "WeVisOne-VL · Click an object, drag a box around it, or describe it. Blue shows the current selection.",
+            "WeVisOne-VL · Click an object, drag a box around it, or describe it.",
         ).pack(anchor="w")
         self.canvas = tk.Canvas(
             self, bg=ui.WELL, width=ui.CW, height=184, bd=0, highlightthickness=0, cursor="crosshair"
@@ -45,6 +100,7 @@ class SelectView(tk.Frame):
         self.canvas.bind("<ButtonRelease-1>", self._release)
         self.canvas.bind("<Escape>", self._cancel_drag)
         self.canvas.bind("<Unmap>", self._cancel_drag)
+        self.show_mask = ui.Button(self, "Show selection overlay", lambda: self.update_view(show_mask=True))
         self.ops = ui.Seg(
             self, (("replace", "Replace"), ("add", "Add"), ("subtract", "Subtract")), self._operation, ui.CW, 12
         )
@@ -86,19 +142,7 @@ class SelectView(tk.Frame):
         self.grow_entry.bind("<Return>", self._enter_grow)
         self.grow_entry.bind("<KP_Enter>", self._enter_grow)
         ui.small(row, "Grow selection", wrap=0).pack(side="left")
-        self.grow_scale = tk.Scale(
-            row,
-            from_=1,
-            to=max(QUICK_GROW_PIXELS, self.last_grow),
-            orient="horizontal",
-            variable=self.radius,
-            showvalue=False,
-            bg=ui.BG,
-            fg=ui.TEXT,
-            troughcolor=ui.WELL,
-            highlightthickness=0,
-            sliderlength=14,
-        )
+        self.grow_scale = grow_slider(row, self.radius, max(QUICK_GROW_PIXELS, self.last_grow))
         self.grow_scale.pack(side="left", fill="x", expand=True)
         self.grow_amount.trace_add("write", self._grow_number_changed)
         self.radius.trace_add("write", self._grow_slider_changed)
@@ -157,7 +201,7 @@ class SelectView(tk.Frame):
             disabled=not (ready and self.query.get().strip() and (pc.get("selection") or self.operation != "subtract"))
         )
 
-    def update_view(self):
+    def update_view(self, *, show_mask=False):
         if self.bar.collapsed or "edit" in self.bar.sections.collapsed:
             return
         saved = saved_grow_pixels(getattr(self.bar.service.selection, "grow_pixels", None))
@@ -167,12 +211,17 @@ class SelectView(tk.Frame):
             self.last_grow = saved
         pc = self.bar.watcher.snapshot()
         key = pc.get("documentKey") or ""
+        document = pc.get("document")
         blocked = bool(self.bar.service.layers)
         if self.key != key or blocked:
             self._cancel_drag()
             self.key, self.rect = "", None
+            self.mask_shown = False
+        if not key or blocked or document != self.document:
             self.canvas.delete("all")
-        if not self.key:
+            self.photo = None
+        self.document = document
+        if self.photo is None:
             self.canvas.delete("hint")
             msg = (
                 "Keep or discard the current choices first."
@@ -181,9 +230,15 @@ class SelectView(tk.Frame):
             )
             self.canvas.create_text(ui.CW / 2, 92, text=msg, fill=ui.DIM, tags="hint")
         self.buttons()
+        if key and pc.get("selection") and not blocked and not self.mask_shown:
+            if not self.show_mask.winfo_manager():
+                self.show_mask.pack(anchor="w", before=self.ops, pady=(0, 6))
+            self.show_mask.set(disabled=bool(self.loading or self.bar.service.busy() or self.key != key))
+        else:
+            self.show_mask.pack_forget()
         if (
             not key
-            or self.key == key
+            or (self.key == key and not show_mask)
             or self.loading
             or blocked
             or self.bar.service.busy()
@@ -194,17 +249,17 @@ class SelectView(tk.Frame):
 
         def read():
             try:
-                result = self.bar.service.selection_preview(key)
+                result = self.bar.service.selection_preview(key, show_mask=show_mask)
                 with Image.open(io.BytesIO(base64.b64decode(result["image"]))) as im:
                     im.thumbnail((ui.CW, 184), Image.Resampling.LANCZOS)
                     picture = im.copy()
-                self.bar.calls.put((self._ready, (key, picture, "")))
+                self.bar.calls.put((self._ready, (key, picture, "", result["maskShown"])))
             except Exception as exc:
                 self.bar.calls.put((self._ready, (key, None, str(exc))))
 
         threading.Thread(target=read, name="openfill-selection-preview", daemon=True).start()
 
-    def _ready(self, key, picture, error):
+    def _ready(self, key, picture, error, mask_shown=False):
         self.loading = ""
         if self.bar.tab.get() != "select" or self.bar.watcher.snapshot().get("documentKey") != key:
             return
@@ -218,6 +273,9 @@ class SelectView(tk.Frame):
         self.canvas.create_image(left, top, anchor="nw", image=self.photo)
         self.rect = left, top, picture.width, picture.height
         self.key = key
+        self.mask_shown = mask_shown
+        if mask_shown:
+            self.show_mask.pack_forget()
         self.buttons()
 
     def _point(self, event):

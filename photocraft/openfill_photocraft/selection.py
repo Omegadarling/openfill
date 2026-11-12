@@ -8,7 +8,7 @@ import io
 import math
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from openfill.supervisor import read_json, write_json
 
@@ -20,6 +20,41 @@ STALE = "The document or selection changed. Use the updated preview and try agai
 OPERATIONS = {"replace": "new", "add": "add", "subtract": "subtract"}
 DEFAULT_GROW_PIXELS = 4
 MAX_GROW_PIXELS = 500
+# These editor history commands only change the selection. Unknown steps, Undo,
+# rewritten history and missed revisions take a fresh flat export.
+MASK_ONLY_EDITS = {
+    "Quick Selection",
+    "Object Selection",
+    "Magic Wand",
+    "Lasso",
+    "Polygonal Lasso",
+    "Magnetic Lasso",
+    "Rectangular Marquee",
+    "Elliptical Marquee",
+    "Single Row Marquee",
+    "Single Column Marquee",
+    "Load Selection",
+    "Load Transparency",
+    "Add to Selection",
+    "Subtract from Selection",
+    "Intersect with Selection",
+    "Select All",
+    "Deselect",
+    "Inverse",
+    "Reselect",
+    "Select Subject",
+    "Select Sky",
+    "Focus Area",
+    "Expand Selection",
+    "Contract Selection",
+    "Border Selection",
+    "Smooth Selection",
+    "Feather Selection",
+    "Grow",
+    "Similar",
+    "Color Range",
+    "Transform Selection",
+}
 
 
 def valid_grow_pixels(value):
@@ -58,24 +93,51 @@ class Selection:
         self.bridge = bridge
         self.model = WeVisOne(bridge.profile)
         self.key, self.source, self.preview = "", None, None
+        self.matte_key, self.matte = "", None
+        self.document, self.revision, self.history = None, None, []
         self._settings_path = Path(bridge.profile) / "selection-settings.json"
         stored = read_json(self._settings_path)
         self.grow_pixels = saved_grow_pixels(stored.get("grow_pixels") if isinstance(stored, dict) else None)
 
-    def capture(self, key):
+    def capture(self, key, *, show_mask=False):
         client = self.bridge.client
         index, doc = active(client, key)
-        if self.key == key:
+        has_mask = bool(doc.get("hasSelection"))
+        if self.key == key and (not show_mask or self.preview["maskShown"] or not has_mask):
             return self.preview
 
-        # The preview and inference receive exactly the same unmarked composite.
-        image = PCImage(self.bridge, doc["name"], index)
-        full, mask = self.bridge._snapshot(image)
-        active(client, key)
-        # Keep the original pixels so a box around a small object on a large canvas
-        # can be framed at full detail. Only the display and model inputs are reduced.
-        source = Image.new("RGB", full.size, (112, 112, 112))
-        source.paste(full, mask=full.getchannel("A"))
+        document = (index, doc.get("path"), doc["name"], doc["width"], doc["height"], doc.get("activeLayer"))
+        history = doc.get("history") or []
+        steps = history[len(self.history) :]
+        revision = doc.get("revision")
+        same_pixels = (
+            document == self.document
+            and self.source is not None
+            and self.revision is not None
+            and revision == self.revision + len(steps)
+            and history[: len(self.history)] == self.history
+            and (key == self.key or bool(steps))
+            and all(step in MASK_ONLY_EDITS for step in steps)
+        )
+        mask = self.matte if self.matte_key == key and has_mask else None
+        if show_mask and has_mask and mask is None:
+            # Older PhotoCraft versions expose the exact selection through a scratch
+            # document. Only the artist's explicit overlay request takes this path.
+            full, mask = self.bridge._snapshot(PCImage(self.bridge, doc["name"], index))
+        elif not same_pixels:
+            # A flat PNG export is a copy. It leaves the active tab, file and history
+            # in place, even while the artist is refining the selection in PhotoCraft.
+            path = self.bridge._file("preview")
+            try:
+                client.call("app.save", path=path)
+                full = self.bridge._read(path).convert("RGBA")
+            finally:
+                self.bridge._forget(path)
+        if same_pixels:
+            source = self.source
+        else:
+            source = Image.new("RGB", full.size, (112, 112, 112))
+            source.paste(full, mask=full.getchannel("A"))
         thumb = source.copy()
         thumb.thumbnail((720, 500), Image.Resampling.LANCZOS)
         if mask is not None:
@@ -87,8 +149,12 @@ class Selection:
             "key": key,
             "width": doc["width"],
             "height": doc["height"],
+            "maskShown": mask is not None,
             "image": base64.b64encode(stream.getvalue()).decode("ascii"),
         }
+        active(client, key)
+        self.document, self.revision, self.history = document, revision, history
+        self.matte_key, self.matte = key, mask
         self.key, self.source, self.preview = key, source, preview
         return preview
 
@@ -180,6 +246,15 @@ class Selection:
             client.run(
                 "select.loadSelection", channel="transparency", document=scratch, layer=layer, operation=operation
             )
+            # A stroke after the import must never acquire the model's old overlay.
+            known_mask = mask if operation == "new" else None
+            if operation != "new" and self.matte_key == key and self.matte is not None:
+                combine = ImageChops.lighter if operation == "add" else ImageChops.subtract
+                known_mask = combine(self.matte, mask)
+            if known_mask is not None:
+                updated = client.run("document.inspect", document=index)
+                if updated.get("revision") == doc.get("revision", 0) + 1:
+                    self.matte_key, self.matte = key_for(index, updated), known_mask
         finally:
             self.bridge._close(scratch)
         return {

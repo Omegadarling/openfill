@@ -52,6 +52,13 @@ textarea:focus,input:focus,.select select:focus{border-color:var(--accent)}
 .row>label{width:84px;flex:none;font-size:12px;line-height:16px;color:var(--dim)}
 .grow-row{gap:6px}
 #select-radius{min-width:30px;flex:1}
+#select-radius{appearance:none;-webkit-appearance:none;height:24px;padding:0;margin:0;background:transparent;cursor:pointer}
+#select-radius::-webkit-slider-runnable-track{height:3px;border-radius:2px;background:linear-gradient(to right,#b2b2b2 var(--grow-fill,5%),#4a4a4a var(--grow-fill,5%))}
+#select-radius::-moz-range-track{height:3px;border-radius:2px;background:#4a4a4a}
+#select-radius::-moz-range-progress{height:3px;background:#b2b2b2}
+#select-radius::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;margin-top:-5px;border-radius:50%;background:#ececec;border:1px solid #282828;box-shadow:0 1px 1px #0006}
+#select-radius::-moz-range-thumb{width:11px;height:11px;border-radius:50%;background:#ececec;border:1px solid #282828;box-shadow:0 1px 1px #0006}
+#select-radius:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
 #select-px{width:46px;padding:0 4px;text-align:center}
 #select-px[aria-invalid=true]{border-color:var(--bad)}
 .under{text-align:center;margin:-4px 0 0 96px}
@@ -146,12 +153,13 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     <div class="seg s12" id="edit-tools" role="group" aria-label="Edit tool" hidden><button data-tool="fill">Fill</button><button data-tool="expand">Expand</button><button data-tool="txt2img">Create</button></div>
     <div class="context" id="context"><span id="ctx-icon"></span><span id="ctx-text">Connecting to PhotoCraft...</span></div>
     <div id="select-box" class="stack" hidden>
-      <div class="small">WeVisOne-VL · Click an object, drag a box around it, or describe it. Blue shows the current selection.</div>
+      <div class="small">WeVisOne-VL · Click an object, drag a box around it, or describe it.</div>
       <div id="select-surface" style="position:relative;display:grid;place-items:center;min-height:100px;background:#18191b;border-radius:5px">
         <span class="small" id="select-placeholder">Reading the canvas…</span>
         <img id="select-image" alt="Click an object or drag a box around it in the current PhotoCraft canvas" draggable="false" hidden style="max-width:100%;max-height:300px;width:auto;height:auto;cursor:crosshair;touch-action:none;user-select:none">
         <span id="select-marquee" aria-hidden="true" hidden style="position:absolute;pointer-events:none;border:2px dashed var(--accent);background:#4a8ef019"></span>
       </div>
+      <button id="select-overlay" class="btn" hidden>Show selection overlay</button>
       <div class="seg s12" id="select-ops" role="group" aria-label="Combine selection"><button data-op="replace" class="on">Replace</button><button data-op="add">Add</button><button data-op="subtract">Subtract</button></div>
       <label class="field"><span class="label">Describe an object (optional)</span><input id="select-query" type="text" maxlength="500" placeholder="e.g. the cup on the left"></label>
       <div class="row grow-row">
@@ -161,7 +169,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
         <span class="small">px</span><button class="btn" id="select-grow">Grow</button>
       </div>
     </div>
-    <div class="row" id="remove-scene-row" hidden><label for="remove-scene">Suggest for</label><div class="select"><select id="remove-scene"><option value="auto">Automatic from selection</option></select></div></div>
+    <div class="row" id="remove-scene-row" hidden><label for="remove-scene">Kind of removal</label><div class="select"><select id="remove-scene"><option value="auto">Automatic</option></select></div></div>
     <div class="small" id="remove-text" hidden>Select the object and its shadow. Remove includes a small edge margin to clear outlines.</div>
     <div class="stack" id="expand-box" hidden>
       <div class="seg s12 fit" id="presets" role="group" aria-label="Size"></div>
@@ -346,6 +354,7 @@ $("edit-tools").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.da
 let selectKey="", fetchingKey="", retryPreview=0, combine="replace", submittingSelection=false;
 $("select-ops").onclick=e=>{const b=e.target.closest("button");if(b){combine=b.dataset.op;segPick($("select-ops"),b);selectButtons()}};
 const growInput=$("select-px"),growSlider=$("select-radius"),quickGrowMax=Number(growSlider.max);
+function paintGrowTrack(){growSlider.style.setProperty("--grow-fill",100*(growSlider.value-growSlider.min)/(growSlider.max-growSlider.min)+"%")}
 let lastGrowPixels=Number(growInput.value);
 function growPixels(){
   return /^\d{1,3}$/.test(growInput.value)&&growInput.validity.valid?growInput.valueAsNumber:null;
@@ -356,6 +365,7 @@ function growNumberChanged(){
   if(pixels!==null){
     growSlider.max=Math.max(quickGrowMax,pixels);
     growSlider.value=pixels;
+    paintGrowTrack();
   }
   selectButtons();
 }
@@ -369,6 +379,7 @@ function syncSavedGrow(pixels){
 }
 growInput.oninput=growNumberChanged;
 growSlider.oninput=()=>{
+  paintGrowTrack();
   growInput.value=growSlider.value;
   growInput.setAttribute("aria-invalid","false");
   selectButtons();
@@ -444,30 +455,40 @@ async function submitSelection(action,target){
     await tick();
   }catch(e){say(e.message,"bad")}finally{submittingSelection=false;selectButtons()}
 }
-async function selectPreview(){
+let selectDocument="", maskShown=false;
+$("select-overlay").onclick=()=>selectPreview(true);
+async function selectPreview(showMask=false){
   if(document.hidden||layout.collapsed.includes("edit"))return;
   const key=pc.documentKey||"", img=$("select-image"), hint=$("select-placeholder");
+  const identity=JSON.stringify(pc.document), overlay=$("select-overlay");
   if(selectKey!==key||pendingVariations){
     endSelectionDrag();
-    img.hidden=true;selectKey="";hint.hidden=false;
+    if(!key||pendingVariations||selectDocument!==identity)img.hidden=true;
+    selectKey="";maskShown=false;hint.hidden=!img.hidden;
     hint.textContent=pendingVariations?"Keep or discard the current choices first.":key?"Reading the canvas…":"Open an image in PhotoCraft.";
   }
+  selectDocument=identity;
+  overlay.hidden=!key||!sel||pendingVariations||maskShown;
+  overlay.disabled=busy||!!fetchingKey||selectKey!==key;
   selectButtons();
-  if(!key||selectKey===key||fetchingKey||busy||pendingVariations||Date.now()<retryPreview)return;
+  if(!key||(selectKey===key&&!showMask)||fetchingKey||busy||pendingVariations||Date.now()<retryPreview)return;
   fetchingKey=key;
+  overlay.disabled=true;
   try{
-    const result=await post("/api/select/preview",{key});
+    const result=await post("/api/select/preview",{key,showMask});
     const url="data:image/jpeg;base64,"+result.image, picture=new Image();
     picture.src=url;await picture.decode();
     if(mode!=="select"||key!==pc.documentKey||result.key!==key||pendingVariations)return;
     img.src=url;img.hidden=false;hint.hidden=true;selectKey=key;
+    maskShown=result.maskShown;overlay.hidden=!sel||maskShown;
   }catch(e){retryPreview=Date.now()+2000;if(mode==="select"&&key===pc.documentKey)say(e.message,"bad")}
-  finally{fetchingKey="";selectButtons()}
+  finally{fetchingKey="";overlay.disabled=busy||selectKey!==pc.documentKey;selectButtons()}
 }
 $("vars").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("vars"),b);variations=+b.textContent}};
 $("sizes").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("sizes"),b);size=[+b.dataset.w,+b.dataset.h];$("size-px").textContent=`${size[0]} x ${size[1]} px`}};
 $("targets").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("targets"),b);target=b.dataset.target}};
 const TEXTURE_REMOVAL = "photocraft-texture";
+const H3_IMAGE_ID = "remote-minimax-h3-image";
 const selectionHint = $("remove-text").textContent;
 let removalScenes = [], selectedScene = "auto", advice = null, advicePending = "", pendingVariations = false;
 let inventoryReady = false, quickRemove = "";
@@ -501,7 +522,7 @@ async function refreshAdvice(){
 function showRemovalGuide(opts) {
   const box = $("remove-scene"), key = JSON.stringify(removalScenes);
   if (box.dataset.key !== key) {
-    box.replaceChildren(new Option("Automatic from selection","auto"),new Option("Manual method",""), ...removalScenes.map(x => new Option(x.scene,x.scene)));
+    box.replaceChildren(new Option("Automatic","auto"),new Option("Manual method",""), ...removalScenes.map(x => new Option(x.scene,x.scene)));
     box.dataset.key = key;
   }
   if(selectedScene==="auto"){
@@ -845,7 +866,10 @@ const PROMPT_FREE=["lama-big","mat-places512"];
 function usable(){return models.filter(r=>r.visible!==false&&r.installed&&r.runnable&&!(r.missing_models||[]).length&&!(r.missing_nodes||[]).length)}
 function removalChoices(){const inst=usable(),rem=inst.filter(r=>(r.capabilities||[]).includes("remove")),ids=new Set(rem.map(r=>r.id));
   const texture=["Local background repair",TEXTURE_REMOVAL];
-  if(remoteFibo)return [texture,...rem.map(r=>[r.removal_label||r.name,r.id])];
+  if(remoteFibo){
+    const methods=rem.map(r=>[r.removal_label||r.name,r.id]);
+    return [...methods.filter(m=>m[1]===H3_IMAGE_ID),texture,...methods.filter(m=>m[1]!==H3_IMAGE_ID)];
+  }
   const painters=inst.filter(r=>(r.capabilities||[]).includes("fill")&&!ids.has(r.id)).sort((a,b)=>(a.id!==activeId)-(b.id!==activeId));
   const def=PROMPT_FREE.find(m=>ids.has(m)),out=[];
   if(def)out.push([`${short(rem.find(r=>r.id===def).name)} (default)`,"default"]);
@@ -862,8 +886,9 @@ function fillSelect(){const s=$("model");let opts;
   s.innerHTML="";if(!opts.length){const o=document.createElement("option");o.value="";o.textContent=models.some(r=>r.installed&&r.runnable)?"No visible models":models.length||!comfy?"No models installed":"Checking...";s.appendChild(o)}
   for(const[label,value]of opts){const o=document.createElement("option");o.value=value;o.textContent=label;s.appendChild(o)}
   s.appendChild(document.createElement("hr"));const m=document.createElement("option");m.value="__manage";m.textContent="Manage models...";s.appendChild(m);
-  if(waiting){const pending=new Option("Choose a method…","");pending.disabled=true;s.prepend(pending)}
-  s.value=waiting?"":want||"";drawReferences()}
+  const h3Default=waiting&&opts.some(o=>o[1]===H3_IMAGE_ID);
+  if(waiting&&!h3Default){const pending=new Option("Choose a method…","");pending.disabled=true;s.prepend(pending)}
+  s.value=waiting?(h3Default?H3_IMAGE_ID:""):want||"";drawReferences()}
 
 function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.statusText||"").startsWith("Downloading"))||models.find(r=>r.statusText==="Waiting");
   if(mode==="select"||(mode==="remove"&&$("model").value===TEXTURE_REMOVAL))html="";

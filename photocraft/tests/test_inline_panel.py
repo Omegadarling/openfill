@@ -233,6 +233,15 @@ class InlinePanelTests(unittest.TestCase):
         self.assertEqual(bar.model_box.values, [self.qwen_name])
         self.assertFalse(bar.go.disabled)
 
+    def test_kind_of_removal_fits_the_platform_font_and_remains_aligned(self):
+        self.bar.tab_buttons["remove"].invoke()
+        row = self.bar.remove_scene_row.winfo_children()[0]
+        label_cell, _ = row.winfo_children()
+        label = label_cell.winfo_children()[0]
+        self.assertEqual(label.cget("text"), "Kind of removal")
+        self.assertGreaterEqual(int(label_cell.cget("width")), self.bar.fonts.small.measure(label.cget("text")))
+        self.assertEqual(int(label_cell.cget("width")) + 12 + int(self.bar.remove_scene_box.cget("width")), ui.CW)
+
     def test_remove_defaults_to_texture_offline_and_preserves_pending_edit_controls(self):
         bar = self.bar
         bar.prompt.set("An edit I am still writing")

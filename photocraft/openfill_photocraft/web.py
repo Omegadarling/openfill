@@ -202,7 +202,7 @@ class Api:
     def post(self, path: str, body: dict[str, Any]) -> Any:
         svc, app = self.service, self.service.app
         if path == "/api/select/preview":
-            return svc.selection_preview(body.get("key"))
+            return svc.selection_preview(body.get("key"), show_mask=body.get("showMask") is True)
         if path == "/api/removal-advice":
             available = body.get("available")
             if (

@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any
 
 from PIL import Image, ImageDraw
 
+from openfill.remote_models import H3_IMAGE_ID
+
 from . import ui
 from .menu import Watcher
 from .modelinfo import choose_card_line, download_card_line, hardware_line, needed_by
@@ -109,7 +111,10 @@ def removal_choices(facts: dict[str, Any], *, existing_server: bool = False) -> 
     models = facts.get("models") or {}
     removers = list(models.get("remove", []))
     if existing_server:
-        return {TEXTURE_LABEL: TEXTURE_REMOVAL, **{name: model_id for model_id, name in removers}}
+        choices = {name: model_id for model_id, name in removers if model_id == H3_IMAGE_ID}
+        choices[TEXTURE_LABEL] = TEXTURE_REMOVAL
+        choices.update({name: model_id for model_id, name in removers if model_id != H3_IMAGE_ID})
+        return choices
     ids = {model_id for model_id, _name in removers}
     painters = [(i, n) for i, n in models.get("fill", []) if i not in ids]
     active = facts.get("active") or ""
@@ -493,11 +498,17 @@ class Bar:
         self.context = ui.small(self.context_row, "", wrap=CW - 20)
         self.context.pack(side="left", padx=(6, 0), fill="x")
         self.remove_scene_row = ui.frame(m)
+        removal_label = "Kind of removal"
+        label_width = max(LABEL_W, self.fonts.small.measure(removal_label) + 2)
         self.remove_scene_box = ui.Select(
-            self._row(self.remove_scene_row, "Suggest for"), ui.FIELD_W, command=self._scene_picked
+            self._row(self.remove_scene_row, removal_label, label_width=label_width),
+            CW - label_width - 12,
+            command=self._scene_picked,
         )
         self.remove_scene_box.pack(side="left")
         self.remove_scene = self.prefs.get("removalGuide", AUTO)
+        if self.remove_scene == "Automatic from selection":
+            self.remove_scene = AUTO
         self._advice = {}
         self._quick_remove = ""
         self.scene_choices = {}
@@ -610,11 +621,11 @@ class Bar:
         self.pick_size("Square")
         self._update_target()
 
-    def _row(self, parent: tk.Misc, label: str, pady=(0, 0), *, label_var=None) -> tk.Frame:
-        """A form row: an 84 px grey label, then the control (packed into the returned frame)."""
+    def _row(self, parent: tk.Misc, label: str, pady=(0, 0), *, label_var=None, label_width=LABEL_W) -> tk.Frame:
+        """A label column followed by the control, packed into the returned frame."""
         row = ui.frame(parent)
         row.pack(fill="x", pady=pady)
-        cell = ui.frame(row, width=LABEL_W, height=32)
+        cell = ui.frame(row, width=label_width, height=32)
         cell.pack_propagate(False)
         cell.pack(side="left")
         caption = ui.small(cell, label, wrap=0)
@@ -1416,7 +1427,7 @@ class Bar:
                     self._advice = self.service.removal_advice(available)
                 tip = self._advice.get("tip", SELECTION_HINT)
                 label = next((n for n, i in choices.items() if i == self._advice.get("displayMethod")), "")
-                waiting_for_advice = not label
+                waiting_for_advice = self._advice.get("status") != "ready" or not label
                 if label:
                     self.model_choice.set(label)
                     self.model_box.set(label)

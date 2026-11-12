@@ -8,7 +8,7 @@ The standard tools share the engine from [upstream OpenFill](https://github.com/
 
 ## Select an object
 
-Open **Filter → Plug-ins → OpenFill**, then choose **Select**. Click inside an object in the panel preview, or drag a tight box around a small or overlapping object. Release to select its outline. Escape cancels the drag. Blue shows the selection. You can also enter **the teaspoon beside the cup** and press **Select by description**. A description can narrow a click or a box to the part you want.
+Open **Filter → Plug-ins → OpenFill**, then choose **Select**. Click inside an object in the panel preview, or drag a tight box around a small or overlapping object. Release to select its outline. Escape cancels the drag. After refining the outline in PhotoCraft, choose **Show selection overlay** to see the current mask in blue on the thumbnail. You can also enter **the teaspoon beside the cup** and press **Select by description**. A description can narrow a click or a box to the part you want.
 
 Use **Add** to include another object or **Subtract** to take one out. To expand the selection, move the **Grow selection** slider or type **1–500** in the pixel field beside **Grow**. Click **Grow** or press **Enter** in the field. Each press expands the outline by that many document pixels and gives you one Undo step. Both panels remember the last amount you applied, starting at 4 px. Grow also works with a PhotoCraft lasso or marquee, even without ComfyUI. Switch straight to **Edit** or **Remove** to use the selection.
 
@@ -37,8 +37,7 @@ An existing `selection-engine.json` adds **Local WeVisOne** to the Select picker
 ### Remove an object
 
 1. Lasso the whole object, its shadow or reflection, and a narrow margin of background. Leave some unselected background for OpenFill to sample.
-2. Open **Remove**. **Automatic from selection** reads the size of the selection and samples colors, edges and texture in the visible composite. The panel shows the suggested **Method** and a reason. Sampling happens locally. Redraw the selection to get a fresh suggestion.
-   You can choose a **Method** yourself or pick a situation in **Suggest for**. Choose **Automatic from selection** to resume automatic suggestions.
+2. Open **Remove**. Under **Kind of removal**, **Automatic** uses MiniMax H3 Image when it is available and visible on the selected engine. Otherwise it samples the colors, edges and texture around the selection and suggests an available **Method**. You can pick a kind of removal or choose a **Method** yourself.
 3. Choose **Variations** (1–5), press **Remove**, then click each result thumbnail to compare it on the canvas. You can also run another method on the same selection to add alternatives.
 4. Choose **Keep** under the result you want, or **Discard** to return to the original.
 
@@ -78,7 +77,7 @@ Edit discovers the supported MiniMax H3 Image, Qwen and FIBO checkpoints when th
 
 ### MiniMax H3 Image
 
-On an existing ComfyUI server with the native `MiniMaxH3ImageConditioning` node, use `minimax_h3_image_pruned_int8_convrot.safetensors`, `minimax_h3_image_vae_fp16.safetensors`, and either `qwen3vl_32b_minimax_h3_int8_convrot.safetensors` or `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`. INT8 is preferred when both encoders are visible; NVFP4 requires compatible hardware. The model appears in both Edit and Remove. It uses six steps, processes a crop near 4 megapixels, and protects the area outside the selection. In Remove, pick **MiniMax H3 Image** in **Method**. OpenFill clears the selected object using nearby background, then H3 refines that area. Remove uses the selection’s feather and a small outward blend to match the surrounding surface. The completed job shows the model and server used. This discovery applies to existing servers; managed-engine installation does not install these files. [Model files](https://huggingface.co/Comfy-Org/MiniMax-H3-Image)
+On an existing ComfyUI server with the native `MiniMaxH3ImageConditioning` node, use `minimax_h3_image_pruned_int8_convrot.safetensors`, `minimax_h3_image_vae_fp16.safetensors`, and either `qwen3vl_32b_minimax_h3_int8_convrot.safetensors` or `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`. INT8 is preferred when both encoders are visible; NVFP4 requires compatible hardware. The model appears in both Edit and Remove. It uses six steps, processes a crop near 4 megapixels, and protects the area outside the selection. For Remove, **Automatic** selects H3 when it is available and visible on the current engine. The **Method** field shows which model will run. OpenFill clears the selected object using nearby background, then H3 refines that area. Remove uses the selection’s feather and a small outward blend to match the surrounding surface. The completed job shows the model and server used. This discovery applies to existing servers; managed-engine installation does not install these files. [Model files](https://huggingface.co/Comfy-Org/MiniMax-H3-Image)
 
 ### Qwen Image 2.1
 

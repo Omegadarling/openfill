@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")]
@@ -17,6 +18,27 @@ from openfill.remote_models import LAMA_ID, QWEN21_LIGHTNING_ID, ROREM_ID  # noq
 
 
 class AdviceTests(unittest.TestCase):
+    def test_automatic_h3_uses_current_visible_engine_and_preserves_fallback(self):
+        from openfill_photocraft.service import Service
+
+        from openfill.remote_models import H3_IMAGE_ID
+
+        service = Mock(layers=[])
+        service.busy.return_value = False
+        app = service.app_for.return_value
+        app.settings.remote_fibo, app.settings.fibo_source, app.settings.hidden_models = True, "studio", []
+        service.photocraft.return_value = {"selectionKey": "stroke"}
+        advice = Service.removal_advice(service, [LAMA_ID, H3_IMAGE_ID])
+        self.assertEqual((advice["method"], advice["source"], advice["key"]), (H3_IMAGE_ID, "studio", "stroke"))
+        service.advice_sampler.request.assert_not_called()
+        service.photocraft.return_value = {}
+        self.assertEqual(Service.removal_advice(service, [H3_IMAGE_ID])["status"], "empty")
+        service.advice_sampler.request.return_value = {"status": "sampling"}
+        app.settings.hidden_models = [H3_IMAGE_ID]
+        self.assertEqual(Service.removal_advice(service, [H3_IMAGE_ID])["status"], "sampling")
+        app.settings.hidden_models = []
+        self.assertEqual(Service.removal_advice(service, [LAMA_ID])["status"], "sampling")
+
     def test_gradient_with_an_edge_selection_only_samples_the_canvas(self):
         def gradient(x, y):
             self.assertTrue(0 <= x < 100 and 0 <= y < 80)

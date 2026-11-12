@@ -5,7 +5,8 @@ from openfill.remote_models import DEV_ID, LAMA_ID, QWEN21_LIGHTNING_ID, ROREM_I
 
 TEXTURE_REMOVAL = "photocraft-texture"
 
-AUTO = "Automatic from selection"
+AUTO = "Automatic"
+H3_TIP = "MiniMax H3 Image fills the selected object with nearby background and refines the repair."
 SCENE_PLACEHOLDER = "Manual method"
 SELECTION_HINT = "Include the object and any shadow you want removed. A small edge margin clears outlines."
 

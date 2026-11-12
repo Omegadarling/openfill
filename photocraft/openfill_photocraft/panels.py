@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 import threading
 import tkinter as tk
+from tkinter import ttk
 from typing import TYPE_CHECKING, Any
 
 from PIL import Image, ImageDraw
@@ -87,6 +88,50 @@ class SectionStack(tk.Frame):
         ImageDraw.Draw(arrow).polygon(((0, 0), (size - 1, size // 2), (0, size - 1)), fill=TEXT)
         arrow = arrow.resize((DISCLOSURE_SIZE, DISCLOSURE_SIZE), Image.Resampling.BOX)
         self._arrows = {True: ui.photo(arrow), False: ui.photo(arrow.transpose(Image.Transpose.ROTATE_270))}
+        # Aqua paints the face of a native push button independently of its requested
+        # background. Use a themed button with an explicitly drawn face for disclosure.
+        style = ttk.Style(self)
+        header_style = "OpenFill.Section.TButton"
+        if "OpenFill.header" not in style.element_names():
+            style.element_create("OpenFill.header", "from", "clam", "border")
+            style.layout(
+                header_style,
+                [
+                    (
+                        "OpenFill.header",
+                        {
+                            "sticky": "nsew",
+                            "children": [
+                                (
+                                    "Button.padding",
+                                    {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]},
+                                ),
+                            ],
+                        },
+                    )
+                ],
+            )
+        style.configure(
+            header_style,
+            background=PANEL,
+            foreground=TEXT,
+            bordercolor=PANEL,
+            lightcolor=PANEL,
+            darkcolor=PANEL,
+            borderwidth=1,
+            padding=(8, 0),
+            anchor="w",
+            relief="flat",
+            font=ui.fonts(self).bold,
+        )
+        style.map(
+            header_style,
+            background=[("active", LINE)],
+            foreground=[("active", TEXT)],
+            bordercolor=[("focus", ACCENT)],
+            lightcolor=[("focus", ACCENT)],
+            darkcolor=[("focus", ACCENT)],
+        )
         for key in SECTIONS:
             section = self.frames[key] = ui.frame(self)
             header = self.headers[key] = ui.frame(section, PANEL, height=32)
@@ -111,24 +156,14 @@ class SectionStack(tk.Frame):
             grip.bind("<Escape>", self._escape_drag)
             grip.bind("<Up>", lambda _event, name=key: self._move_one(name, -1))
             grip.bind("<Down>", lambda _event, name=key: self._move_one(name, 1))
-            toggle = self.toggles[key] = tk.Button(
+            toggle = self.toggles[key] = ttk.Button(
                 header,
                 command=lambda name=key: self.toggle(name),
-                anchor="w",
-                padx=8,
-                pady=0,
-                bd=0,
+                style=header_style,
+                takefocus=True,
                 text=SECTIONS[key],
                 compound="left",
-                bg=PANEL,
-                fg=TEXT,
-                activebackground=LINE,
-                activeforeground=TEXT,
-                font=ui.fonts(self).bold,
                 cursor="hand2",
-                highlightthickness=1,
-                highlightbackground=PANEL,
-                highlightcolor=ACCENT,
             )
             toggle.pack(side="left", fill="both", expand=True)
             self.bodies[key] = ui.frame(section)

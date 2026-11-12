@@ -21,13 +21,14 @@ from openfill.app import App, NothingSelected
 from openfill.backend import GenerationCancelled, describe_error
 from openfill.config import validate_generation_settings
 from openfill.progress import parse_preview_frame
+from openfill.remote_models import H3_IMAGE_ID
 from openfill.supervisor import process_name
 
 from .bridge import PCImage, PCLayer, PhotoCraftBridge
 from .control import ControlClient, ControlError
 from .engine_routes import EngineRoutes, mode_for
 from .references import ReferenceImages
-from .removal_advice import TEXTURE_REMOVAL, recommend
+from .removal_advice import H3_TIP, TEXTURE_REMOVAL, recommend
 from .selection import Selection, key_for
 from .selection_advice import SelectionSampler, live_selection_key, selection_key
 
@@ -284,19 +285,30 @@ class Service:
                 "status": "paused",
                 "tip": "Choose a Method to compare another repair, or keep or discard the current result.",
             }
-        result = self.advice_sampler.request(self.photocraft())
+        snapshot = self.photocraft()
+        app = self.app_for("remove")
+        if app.settings.remote_fibo and H3_IMAGE_ID in available and H3_IMAGE_ID not in app.settings.hidden_models:
+            key = snapshot.get("selectionKey") or ""
+            return {
+                "status": "ready" if key else "empty",
+                "key": key,
+                "method": H3_IMAGE_ID,
+                "displayMethod": H3_IMAGE_ID,
+                "source": app.settings.fibo_source,
+                "tip": H3_TIP if key else "Select the object and any shadow you want removed.",
+            }
+        result = self.advice_sampler.request(snapshot)
         if result["status"] == "ready":
-            app = self.app_for("remove")
             existing = app.settings.remote_fibo
             result.update(recommend(result.pop("features"), available, existing))
             result["source"] = app.settings.fibo_source if existing else ""
         return result
 
-    def selection_preview(self, key):
+    def selection_preview(self, key, *, show_mask=False):
         with self._operation_lock:
             if self.busy() or self.layers:
                 raise RuntimeError("Finish the current job and keep or discard its choices before selecting.")
-            return self.selection.capture(key)
+            return self.selection.capture(key, show_mask=show_mask)
 
     # jobs -------------------------------------------------------------------------------
 
@@ -409,6 +421,10 @@ class Service:
                 raise RuntimeError("Choose Select, Edit, or Remove for this ComfyUI source.")
             if removing and params.get("removal", "default") in ("", "default", None):
                 params["removal"] = TEXTURE_REMOVAL
+                if H3_IMAGE_ID not in app.settings.hidden_models and any(
+                    entry.id == H3_IMAGE_ID for entry in app.installed_models("remove")
+                ):
+                    params["removal"] = H3_IMAGE_ID
             if not removing and not str(params.get("prompt", "")).strip():
                 raise RuntimeError("Describe the desired edit or selected content.")
         if self.busy():

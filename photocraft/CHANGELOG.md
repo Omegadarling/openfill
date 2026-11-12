@@ -5,6 +5,12 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.3] - 2026-11-12
+
+- Automatic removal prefers MiniMax H3 Image when the selected engine offers it. The removal guide is now labeled **Kind of removal** and **Automatic**.
+- Refining a WeVisOne-VL selection with PhotoCraft's tools keeps the canvas in place. The selection preview can display an exact overlay on request.
+- The Grow slider has PhotoCraft's round handle, and the native Mac panel uses dark, readable section headers.
+
 ## [0.20.2] - 2026-11-12
 
 - Remove keeps the soft edge of a feathered PhotoCraft selection and blends the repair into a small margin of nearby background.
