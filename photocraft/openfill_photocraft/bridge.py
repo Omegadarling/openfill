@@ -376,11 +376,11 @@ class PhotoCraftBridge:
         results = distinct_repairs(results, source, alpha)
         return self.insert_results(image, results, context, "Object Removal", 0, None, mask_pixels=alpha.tobytes())
 
-    def removal_guide(self, image, size, rgba, mask, seed, progress, cancelled) -> bytes:
+    def removal_guide(self, image, size, rgba, mask, seed, progress, cancelled, *, sample_detail=False) -> bytes:
         """Make a clean plate from the exact source crop and mask captured for this AI job."""
         source = Image.frombytes("RGBA", size, rgba)
         alpha = Image.frombytes("L", size, mask)
-        data = self._sample_texture(image, source, alpha, 1, seed, progress, cancelled)[0]
+        data = self._sample_texture(image, source, alpha, 1, seed, progress, cancelled, sample_detail=sample_detail)[0]
         # Texture synthesis also clears its narrow donor guard. The model should
         # see the original scene everywhere outside the actual removal layer.
         with Image.open(_io.BytesIO(data)) as repair:
@@ -428,7 +428,7 @@ class PhotoCraftBridge:
             results.append(buffer.getvalue())
         return results
 
-    def _sample_texture(self, image, source, alpha, variations, seed, progress, cancelled) -> list[bytes]:
+    def _sample_texture(self, image, source, alpha, variations, seed, progress, cancelled, *, sample_detail=False) -> list[bytes]:
         # Every selected pixel is excluded from the donor pool. Apply the artist's
         # soft edge only once, on the result layer in the original document.
         support = grow_support(alpha, 2)
@@ -445,11 +445,24 @@ class PhotoCraftBridge:
             smooth = smooth_background(source, alpha, report, cancelled, horizontal=horizontal)
             if smooth is None:
                 break  # This scene needs sampled texture.
+            if sample_detail:
+                # Continue fine surface grain separately from the interpolated lighting.
+                # The scratch image contains only detail from the cleared background.
+                plate = Image.composite(smooth, source.convert("RGB"), alpha.point(lambda v: 255 if v else 0))
+                detail = ImageChops.subtract(plate, plate.filter(ImageFilter.GaussianBlur(8)), offset=128)
+                detail.putalpha(source.getchannel("A"))
+                sample = self._sample_patches(image, detail, support, 1, seed, progress, cancelled)[0]
+                with Image.open(_io.BytesIO(sample)) as grain:
+                    textured = ImageChops.add(smooth, grain.convert("RGB"), offset=-128)
+                smooth = Image.blend(smooth, textured, 0.5)
             buffer = _io.BytesIO()
             smooth.save(buffer, format="PNG", compress_level=1)
             smooth_results.append(buffer.getvalue())
         if smooth_results:
             return smooth_results
+        return self._sample_patches(image, source, support, variations, seed, progress, cancelled)
+
+    def _sample_patches(self, image, source, support, variations, seed, progress, cancelled) -> list[bytes]:
         donors = texture_donors(source, support)
         guide = Image.new("RGBA", source.size, "white")
         guide.putalpha(support)

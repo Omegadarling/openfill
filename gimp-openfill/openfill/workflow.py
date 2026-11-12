@@ -964,13 +964,18 @@ def build_h3_image_edit(
     g.add("load_mask", "LoadImage", image=mask_ref)
     g.add("selection_mask", "ImageToMask", image=g.out("load_mask"), channel="red")
     g.add("selection_support", "ThresholdMask", mask=g.out("selection_mask"), value=0.0)
-    if req.h3_removal_locator:
+    if req.h3_removal:
         if len(reference_refs) != 1:
-            raise ValueError("H3 removal requires one marked locator image")
-        g.add("reference_2", "LoadImage", image=reference_refs[0])
-        slots = {"images.image_1": g.out("reference_2")}
+            raise ValueError("H3 removal requires one prepared background")
+        g.add("background", "LoadImage", image=reference_refs[0])
+        slots = {"images.image_1": g.out("background")}
+        pixels = _scale_image(g, "background_scale", g.out("background"), width, height)
+        g.add("background_latent", "VAEEncode", pixels=pixels, vae=g.out("vae"))
+        g.add("masked_latent", "SetLatentNoiseMask", samples=g.out("background_latent"), mask=g.out("selection_mask"))
+        latent = g.out("masked_latent")
     else:
         slots = _edit_image_slots(g, g.out("load_image"), reference_refs)
+        latent = g.out("encode", 1)
     g.add(
         "encode",
         "MiniMaxH3ImageConditioning",
@@ -982,26 +987,27 @@ def build_h3_image_edit(
         **slots,
     )
     g.add("negative", "ConditioningZeroOut", conditioning=g.out("encode", 0))
-    latent = g.out("encode", 1)
     batch = max(1, int(req.sampling.batch))
-    if batch > 1:
-        g.add("latent_batch", "RepeatLatentBatch", samples=latent, amount=batch)
-        latent = g.out("latent_batch")
-    g.add(
-        "sampler",
-        "KSampler",
+    # The H3 transformer accepts one latent at a time. Share conditioning and
+    # the starting latent, then join the independently sampled variations for decoding.
+    sampler_inputs = dict(
         model=g.out("unet"),
         positive=g.out("encode", 0),
         negative=g.out("negative"),
         latent_image=latent,
-        seed=int(seed),
         steps=6,
         cfg=1.0,
         sampler_name="euler",
         scheduler="simple",
-        denoise=1.0,
+        denoise=req.sampling.denoise if req.h3_removal else 1.0,
     )
-    g.add("decode", "VAEDecode", samples=g.out("sampler"), vae=g.out("vae"))
+    g.add("sampler", "KSampler", seed=int(seed), **sampler_inputs)
+    samples = g.out("sampler")
+    for index in range(1, batch):
+        variation = g.add(f"sampler_{index + 1}", "KSampler", seed=(int(seed) + index) % (1 << 64), **sampler_inputs)
+        joined = g.add(f"latents_{index + 1}", "LatentBatch", samples1=samples, samples2=g.out(variation))
+        samples = g.out(joined)
+    g.add("decode", "VAEDecode", samples=samples, vae=g.out("vae"))
     _finish(g, aligned, g.out("decode"), g.out("selection_support"), caps, filename_prefix)
     generated = g.nodes[OUTPUT_NODE]["inputs"]["images"]
     destination = g.out("load_image")

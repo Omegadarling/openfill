@@ -175,7 +175,7 @@ class InpaintRequest:
     fibo_edit_mode: str = "preserve"  # preserve | replace | background
     # Immutable normalized PNGs in attachment order; the target is separate.
     reference_images: tuple[bytes, ...] = ()
-    h3_removal_locator: bool = False  # use the marked reference as Picture 1, not the unmarked source
+    h3_removal: bool = False  # start H3 from a prefilled background and keep the original for compositing
 
     @property
     def needs_scaling(self) -> bool:

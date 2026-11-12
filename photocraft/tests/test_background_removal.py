@@ -103,23 +103,46 @@ class BackgroundRemovalTests(unittest.TestCase):
                 self.assertEqual(inserted.kwargs["mask_pixels"], self.alpha)
                 self.app.io.removal_guide.assert_not_called()
 
-    def test_h3_removal_sends_the_marked_locator_and_preserves_the_prepared_mask(self):
-        self.app.io.removal_locator.return_value = b"red locator"
+    def test_h3_removal_samples_only_from_the_cleared_background(self):
         model = ModelSpec(arch="h3_image", template=H3_IMAGE_EDIT_TEMPLATE, unet="unet", clip1="clip", vae="vae")
         self.app.resolve_model.return_value = (self.entry, model)
-        self.app.generative_fill(object(), "", "", 1, 1, 25, "chosen", remove=True, as_picked=True)
+        self.app.generative_fill(object(), "", "", 2, 1, 25, "chosen", remove=True, as_picked=True)
         req = self.app.backend.return_value.inpaint.call_args.args[0]
-        self.assertEqual(req.reference_images, (b"red locator",))
+        self.assertEqual(req.image_png, b"original PNG")
+        self.assertEqual(req.reference_images, (b"clean plate PNG",))
+        self.assertTrue(self.app.io.removal_guide.call_args.kwargs["sample_detail"])
+        self.app.io.removal_locator.assert_not_called()
         self.assertIn("<Picture 1>", req.prompt)
-        self.assertTrue(req.h3_removal_locator)
+        self.assertTrue(req.h3_removal)
         self.assertEqual(self.app.io.insert_results.call_args.kwargs["mask_pixels"], self.alpha)
         graph = workflow.build_fill(
-            req, "original.png", "mask.png", 25, workflow.Capabilities(), reference_refs=("locator.png",)
+            req, "original.png", "mask.png", 25, workflow.Capabilities(), reference_refs=("background.png",)
         )
-        self.assertEqual(graph["encode"]["inputs"]["images.image_1"], ["reference_2", 0])
+        self.assertEqual(graph["encode"]["inputs"]["images.image_1"], ["background", 0])
         self.assertNotIn("images.image_2", graph["encode"]["inputs"])
-        self.assertEqual(graph["selection_composite"]["inputs"]["destination"], ["load_image", 0])
+        self.assertEqual(graph["background"]["inputs"]["image"], "background.png")
+        self.assertEqual(graph["background_scale"]["inputs"]["image"], ["background", 0])
+        self.assertEqual(graph["background_latent"]["inputs"]["pixels"], ["background_scale", 0])
+        self.assertEqual(graph["masked_latent"]["inputs"]["mask"], ["selection_mask", 0])
+        self.assertEqual(graph["masked_latent"]["inputs"]["samples"], ["background_latent", 0])
+        self.assertEqual(graph["sampler"]["inputs"]["latent_image"], ["masked_latent", 0])
+        self.assertEqual(graph["sampler_2"]["inputs"]["latent_image"], ["masked_latent", 0])
+        self.assertEqual(graph["sampler_2"]["inputs"]["seed"], 26)
+        self.assertEqual(graph["decode"]["inputs"]["samples"], ["latents_2", 0])
+        self.assertEqual(graph["sampler"]["inputs"]["denoise"], 0.18)
+        self.assertEqual(graph["source_batch"]["inputs"]["image"], ["load_image", 0])
         self.assertEqual(graph["selection_composite"]["inputs"]["mask"], ["selection_support", 0])
+        with self.assertRaisesRegex(ValueError, "prepared background"):
+            workflow.build_h3_image_edit(req, "original.png", "mask.png", 25, workflow.Capabilities())
+
+    def test_h3_cancels_before_submission_if_the_background_cannot_be_prepared(self):
+        model = ModelSpec(arch="h3_image", template=H3_IMAGE_EDIT_TEMPLATE, unet="unet", clip1="clip", vae="vae")
+        self.app.resolve_model.return_value = (self.entry, model)
+        self.app.io.removal_guide.side_effect = RuntimeError("scratch fill failed")
+        with self.assertRaisesRegex(RuntimeError, "scratch fill failed"):
+            self.app.generative_fill(object(), "", "", 1, 1, 25, "chosen", remove=True, as_picked=True)
+        self.app.backend.assert_not_called()
+        self.app.io.insert_results.assert_not_called()
 
     def test_ineligible_model_or_failed_clean_plate_never_submits_original_image(self):
         self.entry.capabilities = ("fill", "edit")

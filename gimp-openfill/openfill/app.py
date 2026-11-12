@@ -1036,8 +1036,8 @@ class App:
             strength = 1.0
         elif h3_removal:
             prompt = (
-                "Remove the object highlighted in red from <Picture 1>, along with all red highlighting. "
-                "Fill the area with the surrounding background and preserve the rest of the image."
+                "Restore <Picture 1> as a clean background plate. Maintain the existing color gradients, lighting and "
+                "surface detail. Smooth out repair seams without adding objects or patterns."
             )
             negative = ""
         elif qwen_removal:
@@ -1094,7 +1094,7 @@ class App:
             mask_raw = self.io.prepare_removal_mask(ctx.size, mask_raw)
             mask_png = png.encode(ctx.width, ctx.height, mask_raw, 1)
         layer_mask = mask_raw if remote_removal else None
-        if qwen_removal or h3_removal:
+        if qwen_removal:
             reference_images = (self.io.removal_locator(ctx.size, image_rgba, mask_raw),)
         if selection_edit and auto_feather and auto_feather_percent > 0:
             from .auto_feather import feather_selection
@@ -1126,6 +1126,8 @@ class App:
         sampling = self.sampling(model, variations, seed, strength)
         if fibo_edit and fibo_mode == "preserve":
             sampling = replace(sampling, denoise=0.75)
+        if h3_removal:
+            sampling = replace(sampling, denoise=0.18)
         request = workflow.PlannedInpaintRequest(
             image_png=image_png,
             mask_png=mask_png,
@@ -1146,7 +1148,7 @@ class App:
             color_match=color_match,
             fibo_edit_mode=fibo_mode if fibo_edit else "preserve",
             reference_images=reference_images,
-            h3_removal_locator=h3_removal,
+            h3_removal=h3_removal,
             tiles=plan.tiles,
             refine_tiles=plan.refine_tiles,
             refine_denoise=float(self.settings.refine_denoise),
@@ -1161,16 +1163,19 @@ class App:
             self, title, model_display_name(entry.name) if entry else model.checkpoint, interactive=self.interactive
         )
         try:
-            if rebuild_background:
+            if rebuild_background or h3_removal:
                 prepare = getattr(self.io, "removal_guide", None)
                 if prepare is None:
                     raise BackendError("Open the PhotoCraft Remove panel to rebuild the background.")
                 clean_plate = runner.run(
                     lambda progress, _preview, cancel: prepare(
-                        image, ctx.size, image_rgba, mask_raw, seed, progress, cancel
+                        image, ctx.size, image_rgba, mask_raw, seed, progress, cancel, sample_detail=h3_removal
                     )
                 )
-                request = replace(request, image_png=clean_plate)
+                if h3_removal:
+                    request = replace(request, reference_images=(clean_plate,))
+                else:
+                    request = replace(request, image_png=clean_plate)
             render_views = (
                 getattr(self.io, "render_removal_views", None)
                 if remove and model.prompt_free and variations > 1
