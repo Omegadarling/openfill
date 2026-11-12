@@ -17,11 +17,55 @@ from openfill_photocraft.local_removal import (  # noqa: E402
     smooth_background,
     texture_donors,
 )
+from openfill_photocraft.removal_blend import match_h3_lighting  # noqa: E402
+from openfill_photocraft.removal_structure import structured_background  # noqa: E402
 
 from openfill.backend import GenerationCancelled  # noqa: E402
 
 
 class LocalRemovalTests(unittest.TestCase):
+    def test_removal_keeps_the_opacity_of_a_wide_feather_and_low_density_selection(self):
+        mask = Image.new("L", (240, 140))
+        ImageDraw.Draw(mask).rectangle((60, 25, 180, 115), fill=255)
+        soft = mask.filter(ImageFilter.GaussianBlur(12))
+        prepared = removal_mask(soft)
+        self.assertEqual(prepared.getpixel((0, 70)), 0)
+        self.assertEqual(prepared.getpixel((120, 70)), 255)
+        ramp = [prepared.getpixel((x, 70)) for x in range(15, 90)]
+        self.assertGreater(len(set(v for v in ramp if 8 < v < 247)), 24)
+        self.assertEqual(ramp, sorted(ramp))
+        self.assertLessEqual(removal_mask(soft.point(lambda v: v // 2)).getextrema()[1], 127)
+
+    def test_reconstructs_one_dark_seam_with_matching_ends(self):
+        size = (360, 260)
+        sky = Image.new("RGBA", size, (190, 192, 197, 255))
+        mask = Image.new("L", size)
+        ImageDraw.Draw(mask).ellipse((120, 69, 240, 196), fill=255)
+        for both_ends in (False, True):
+            scene = sky.copy()
+            ImageDraw.Draw(scene).line(((0, 130), (359 if both_ends else 175, 130)), fill=(30, 35, 40), width=3)
+            ImageDraw.Draw(scene).ellipse((124, 73, 236, 192), fill=(10, 45, 58))
+            repair = structured_background(scene, removal_mask(mask), Mock(), lambda: False)
+            if not both_ends:
+                self.assertIsNone(repair)
+                continue
+            self.assertIsNotNone(repair)
+            self.assertLess(repair.getpixel((180, 130))[0], 65)
+            self.assertGreater(repair.getpixel((180, 117))[0], 170)
+            self.assertEqual(repair.getpixel((40, 130)), scene.getpixel((40, 130))[:3])
+
+    def test_h3_lighting_retains_rendered_detail_and_exact_exterior(self):
+        plate = Image.new("RGB", (160, 120), (170, 176, 182))
+        mask = Image.new("L", plate.size)
+        ImageDraw.Draw(mask).rectangle((25, 20, 135, 100), fill=255)
+        proposal = plate.copy()
+        proposal.paste((185, 191, 197), (25, 20, 136, 101))
+        ImageDraw.Draw(proposal).line((78, 40, 78, 80), fill=(112, 118, 124), width=2)
+        result = match_h3_lighting(plate, proposal, mask)
+        self.assertEqual(result.getpixel((10, 60)), plate.getpixel((10, 60)))
+        self.assertLessEqual(abs(result.getpixel((50, 60))[0] - 170), 1)
+        self.assertGreater(result.getpixel((73, 60))[0] - result.getpixel((78, 60))[0], 45)
+
     def test_sampling_excludes_unrelated_colors_patch_edges_and_transparency(self):
         sky = (23, 70, 84, 255)
         for color, intruder in ((sky, (240, 243, 244, 255)), ((209, 216, 204, 255), (37, 47, 59, 255))):

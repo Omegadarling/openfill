@@ -38,7 +38,8 @@ from openfill.geometry import Rect, flatten_over_mean, plan_native_removal
 
 from .control import ControlClient, ControlError
 from .local_removal import grow_support, removal_mask, smooth_background, texture_donors
-from .removal_blend import blend_reconstruction
+from .removal_blend import blend_reconstruction, match_h3_lighting
+from .removal_structure import structured_background
 from .removal_variations import distinct_repairs, render_views
 
 # How often a mask is tried before a job's result fails (see ``_add_mask``).
@@ -411,14 +412,17 @@ class PhotoCraftBridge:
     def prepare_removal_mask(self, size, pixels: bytes) -> bytes:
         return removal_mask(Image.frombytes("L", size, pixels)).tobytes()
 
-    def blend_removal_results(self, clean_plate: bytes, mask: bytes, proposals: list[bytes]) -> list[bytes]:
+    def blend_removal_results(self, clean_plate: bytes, mask: bytes, proposals: list[bytes], *, h3=False) -> list[bytes]:
         with Image.open(_io.BytesIO(clean_plate)) as image:
             plate = image.convert("RGB")
         selection = Image.frombytes("L", plate.size, mask)
         results = []
         for index, data in enumerate(proposals, 1):
             with Image.open(_io.BytesIO(data)) as proposal:
-                matched, fallback = blend_reconstruction(plate, proposal, selection)
+                if h3:
+                    matched, fallback = match_h3_lighting(plate, proposal, selection), False
+                else:
+                    matched, fallback = blend_reconstruction(plate, proposal, selection)
             if fallback:
                 self.notify(
                     f"Variation {index} uses the local repair because the AI reconstruction differed sharply from the sampled background."
@@ -442,7 +446,9 @@ class PhotoCraftBridge:
             def report(fraction, message, i=index):
                 progress((i + fraction) / variations, f"Repair {i + 1}/{variations}: {message}")
 
-            smooth = smooth_background(source, alpha, report, cancelled, horizontal=horizontal)
+            smooth = structured_background(source, alpha, report, cancelled, horizontal=horizontal)
+            if smooth is None:
+                smooth = smooth_background(source, alpha, report, cancelled, horizontal=horizontal)
             if smooth is None:
                 break  # This scene needs sampled texture.
             if sample_detail:

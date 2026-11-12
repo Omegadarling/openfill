@@ -5,6 +5,11 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.2] - 2026-11-12
+
+- Remove keeps the soft edge of a feathered PhotoCraft selection and blends the repair into a small margin of nearby background.
+- H3 matches the lighting of the surrounding surface. When a single narrow dark seam enters a smooth surface from both sides, the repair can continue the seam through the removed object.
+
 ## [0.20.1] - 2026-11-12
 
 - Fixed MiniMax H3 Image Remove leaving a red copy of the selected object. OpenFill now fills the selection with surrounding background before H3 refines it. The original image supplies all pixels outside the removal mask.

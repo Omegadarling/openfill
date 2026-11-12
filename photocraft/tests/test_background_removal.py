@@ -114,6 +114,7 @@ class BackgroundRemovalTests(unittest.TestCase):
         self.app.io.removal_locator.assert_not_called()
         self.assertIn("<Picture 1>", req.prompt)
         self.assertTrue(req.h3_removal)
+        self.app.io.blend_removal_results.assert_called_once_with(b"clean plate PNG", self.alpha, [], h3=True)
         self.assertEqual(self.app.io.insert_results.call_args.kwargs["mask_pixels"], self.alpha)
         graph = workflow.build_fill(
             req, "original.png", "mask.png", 25, workflow.Capabilities(), reference_refs=("background.png",)

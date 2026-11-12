@@ -1195,6 +1195,8 @@ class App:
             images = result.images
             if rebuild_background:
                 images = self.io.blend_removal_results(clean_plate, mask_raw, images)
+            elif h3_removal:
+                images = self.io.blend_removal_results(clean_plate, mask_raw, images, h3=True)
             distinct = getattr(self.io, "distinct_removal_images", None) if remove and variations > 1 else None
             if distinct:
                 images = distinct(images, ctx.size, image_rgba, layer_mask)

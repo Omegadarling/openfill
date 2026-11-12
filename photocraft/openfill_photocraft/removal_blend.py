@@ -6,6 +6,29 @@ from __future__ import annotations
 from PIL import Image, ImageChops, ImageFilter, ImageOps
 
 
+def match_h3_lighting(plate, proposal, selection):
+    """Keep the sampled lighting while retaining the H3 reconstruction's fine detail."""
+    if plate.size != proposal.size or selection.size != plate.size:
+        raise ValueError("The H3 reconstruction has unexpected dimensions.")
+    support = selection.point(lambda v: 255 if v else 0)
+    bounds = support.getbbox()
+    if not bounds:
+        return proposal.copy()
+    x0, y0, x1, y1 = bounds
+    radius = max(3, min(18, round(min(x1 - x0, y1 - y0) * 0.022)))
+    pad = 3 * radius
+    box = (max(0, x0 - pad), max(0, y0 - pad), min(plate.width, x1 + pad), min(plate.height, y1 + pad))
+    patch = proposal.crop(box).convert("RGB")
+    lighting = plate.crop(box).convert("RGB").filter(ImageFilter.GaussianBlur(radius))
+    generated = patch.filter(ImageFilter.GaussianBlur(radius))
+    brighter = ImageChops.subtract(lighting, generated)
+    darker = ImageChops.subtract(generated, lighting)
+    corrected = ImageChops.add(ImageChops.subtract(patch, darker), brighter)
+    result = proposal.copy()
+    result.paste(corrected, box[:2], support.crop(box))
+    return result
+
+
 def _blur_side(image, support, radius):
     # Premultiplication keeps pixels on the opposite side of the seam out of the average.
     side = image.convert("RGBA")

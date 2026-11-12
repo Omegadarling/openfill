@@ -13,7 +13,11 @@ from openfill.backend import GenerationCancelled
 
 def grow_support(mask: Image.Image, radius: int) -> Image.Image:
     """Dilate without wrapped edges, using a logarithmic number of pixel shifts."""
-    result = mask.point(lambda value: 255 if value else 0)
+    return _dilate(mask.point(lambda value: 255 if value else 0), radius)
+
+
+def _dilate(mask: Image.Image, radius: int) -> Image.Image:
+    result = mask
     for axis in (0, 1):
         covered = 0
         while covered < radius:
@@ -30,12 +34,14 @@ def grow_support(mask: Image.Image, radius: int) -> Image.Image:
 
 
 def removal_mask(selection: Image.Image) -> Image.Image:
-    """Include a narrow, softly blended margin so object-selection fringes disappear."""
+    """Clear the object edge and carry the artist's grayscale feather into the result layer."""
     area = sum(index * count for index, count in enumerate(selection.histogram())) / 255
-    radius = max(2, min(16, round(math.sqrt(area) * 0.006)))
-    support = grow_support(selection, radius)
-    soft = support.filter(ImageFilter.GaussianBlur(max(0.5, radius / 3)))
-    return ImageChops.lighter(selection, ImageChops.multiply(soft, support))
+    reach = max(2, min(32, round(math.sqrt(area) * 0.045)))
+    # Put the blend on the background side. The original grayscale ramp is
+    # dilated at its own opacity, so feathered tails stay partially transparent.
+    expanded = _dilate(selection, round(reach * 1.5))
+    soft = expanded.filter(ImageFilter.GaussianBlur(max(1.0, reach * 0.48)))
+    return ImageChops.lighter(selection, soft)
 
 
 def texture_donors(source: Image.Image, support: Image.Image) -> Image.Image | None:
@@ -91,7 +97,7 @@ def texture_donors(source: Image.Image, support: Image.Image) -> Image.Image | N
 
 
 def smooth_background(
-    source: Image.Image, selection: Image.Image, progress, cancelled, *, horizontal: float = 0.5
+    source: Image.Image, selection: Image.Image, progress, cancelled, *, horizontal: float = 0.5, boundary_only=False
 ) -> Image.Image | None:
     """Use harmonic interpolation when the surrounding image has very little texture."""
     rgb = source.convert("RGB")
@@ -113,11 +119,16 @@ def smooth_background(
     detail = ImageChops.difference(analysis, analysis.filter(ImageFilter.GaussianBlur(1.4)))
     red, green, blue = detail.split()
     detail = ImageChops.lighter(ImageChops.lighter(red, green), blue)
-    counts = detail.histogram(mask=known)
+    samples = known
+    if boundary_only:
+        # A verified line crosses the hole. Judge the texture of its two local
+        # surfaces without counting other objects farther away in the crop.
+        samples = ImageChops.darker(known, grow_support(support, 12))
+    counts = detail.histogram(mask=samples)
     total = sum(counts)
     # A strict tail limit keeps backgrounds with visible texture and edges on
     # the texture-synthesis path.
-    if sum(counts[3:]) > total * 0.05 or sum(counts[6:]) > total * 0.01:
+    if not total or sum(counts[3:]) > total * (0.12 if boundary_only else 0.05) or sum(counts[6:]) > total * (0.07 if boundary_only else 0.01):
         return None
 
     # Classification uses a wider guard. Interpolation follows the actual
