@@ -20,7 +20,14 @@ import zlib
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
-from .backend import QWEN21_EDIT_TEMPLATE, InpaintRequest, ModelSpec, Txt2ImgRequest, validate_edit_references
+from .backend import (
+    H3_IMAGE_EDIT_TEMPLATE,
+    QWEN21_EDIT_TEMPLATE,
+    InpaintRequest,
+    ModelSpec,
+    Txt2ImgRequest,
+    validate_edit_references,
+)
 
 OUTPUT_NODE = "save"
 
@@ -920,8 +927,103 @@ def build_qwen21_edit(
     return g.to_dict()
 
 
+def h3_image_size(width: int, height: int) -> tuple[int, int]:
+    """Use the native workflow's 4 MP minimum, preserving the crop's aspect ratio."""
+    if min(width, height) < 1:
+        raise ValueError("MiniMax H3 Image needs positive image dimensions")
+    ratio = width / height
+    if ratio > 512 or ratio < 1 / 512:
+        raise ValueError("MiniMax H3 Image cannot preserve an aspect ratio wider than 512:1")
+    wide, high = math.sqrt(2048**2 * ratio), math.sqrt(2048**2 / ratio)
+    scale = min(1.0, 16384 / max(wide, high))
+    return max(32, round(wide * scale / 32) * 32), max(32, round(high * scale / 32) * 32)
+
+
+def build_h3_image_edit(
+    req: InpaintRequest,
+    image_ref: str,
+    mask_ref: str,
+    seed: int,
+    caps: Capabilities,
+    filename_prefix: str = "openfill/h3-image",
+    *,
+    reference_refs: tuple[str, ...] = (),
+) -> dict:
+    """Native MiniMax H3 instruction edit with hard selection exterior protection."""
+    if req.mode != "fill" or not req.prompt.strip():
+        raise ValueError("Write an edit instruction for MiniMax H3 Image")
+    if not all((req.model.unet, req.model.clip1, req.model.vae)):
+        raise ValueError("MiniMax H3 Image needs its diffusion model, 32B encoder and image VAE")
+    width, height = h3_image_size(req.width, req.height)
+    aligned = replace(req, work_width=width, work_height=height, color_match=0.0)
+    g = Graph()
+    g.add("unet", "UNETLoader", unet_name=req.model.unet, weight_dtype="default")
+    g.add("clip", "CLIPLoader", clip_name=req.model.clip1, type="minimax", device="default")
+    g.add("vae", "VAELoader", vae_name=req.model.vae)
+    g.add("load_image", "LoadImage", image=image_ref)
+    g.add("load_mask", "LoadImage", image=mask_ref)
+    g.add("selection_mask", "ImageToMask", image=g.out("load_mask"), channel="red")
+    g.add("selection_support", "ThresholdMask", mask=g.out("selection_mask"), value=0.0)
+    if req.h3_removal_locator:
+        if len(reference_refs) != 1:
+            raise ValueError("H3 removal requires one marked locator image")
+        g.add("reference_2", "LoadImage", image=reference_refs[0])
+        slots = {"images.image_1": g.out("reference_2")}
+    else:
+        slots = _edit_image_slots(g, g.out("load_image"), reference_refs)
+    g.add(
+        "encode",
+        "MiniMaxH3ImageConditioning",
+        clip=g.out("clip"),
+        vae=g.out("vae"),
+        prompt=req.prompt,
+        width=width,
+        height=height,
+        **slots,
+    )
+    g.add("negative", "ConditioningZeroOut", conditioning=g.out("encode", 0))
+    latent = g.out("encode", 1)
+    batch = max(1, int(req.sampling.batch))
+    if batch > 1:
+        g.add("latent_batch", "RepeatLatentBatch", samples=latent, amount=batch)
+        latent = g.out("latent_batch")
+    g.add(
+        "sampler",
+        "KSampler",
+        model=g.out("unet"),
+        positive=g.out("encode", 0),
+        negative=g.out("negative"),
+        latent_image=latent,
+        seed=int(seed),
+        steps=6,
+        cfg=1.0,
+        sampler_name="euler",
+        scheduler="simple",
+        denoise=1.0,
+    )
+    g.add("decode", "VAEDecode", samples=g.out("sampler"), vae=g.out("vae"))
+    _finish(g, aligned, g.out("decode"), g.out("selection_support"), caps, filename_prefix)
+    generated = g.nodes[OUTPUT_NODE]["inputs"]["images"]
+    destination = g.out("load_image")
+    if batch > 1:
+        g.add("source_batch", "RepeatImageBatch", image=destination, amount=batch)
+        destination = g.out("source_batch")
+    g.add(
+        "selection_composite",
+        "ImageCompositeMasked",
+        destination=destination,
+        source=generated,
+        x=0,
+        y=0,
+        resize_source=False,
+        mask=g.out("selection_support"),
+    )
+    g.nodes[OUTPUT_NODE]["inputs"]["images"] = g.out("selection_composite")
+    return g.to_dict()
+
+
 SDXL_EDIT_TEMPLATES = ("sdxl_edit", "sdxl_inpaint_edit")
-SELECTION_EDIT_TEMPLATES = ("fibo2_edit", QWEN21_EDIT_TEMPLATE, *SDXL_EDIT_TEMPLATES)
+SELECTION_EDIT_TEMPLATES = ("fibo2_edit", QWEN21_EDIT_TEMPLATE, H3_IMAGE_EDIT_TEMPLATE, *SDXL_EDIT_TEMPLATES)
 
 
 def build_sdxl_edit(
@@ -1462,6 +1564,7 @@ BUILDERS = {
     "flux_fill": build_flux_fill,
     "qwen_edit": build_qwen_edit,
     QWEN21_EDIT_TEMPLATE: build_qwen21_edit,
+    H3_IMAGE_EDIT_TEMPLATE: build_h3_image_edit,
     "sdxl_edit": build_sdxl_edit,
     "sdxl_inpaint_edit": build_sdxl_edit,
     "fibo2_edit": build_fibo2_edit,

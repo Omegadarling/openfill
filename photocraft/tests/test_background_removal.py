@@ -16,6 +16,7 @@ from PIL import Image, ImageChops  # noqa: E402
 from openfill import workflow  # noqa: E402
 from openfill.app import App  # noqa: E402
 from openfill.backend import (  # noqa: E402
+    H3_IMAGE_EDIT_TEMPLATE,
     QWEN21_EDIT_TEMPLATE,
     QWEN21_LIGHTNING_FILE,
     BackendError,
@@ -101,6 +102,24 @@ class BackgroundRemovalTests(unittest.TestCase):
                 self.assertEqual(inserted.args[4], 0.0)
                 self.assertEqual(inserted.kwargs["mask_pixels"], self.alpha)
                 self.app.io.removal_guide.assert_not_called()
+
+    def test_h3_removal_sends_the_marked_locator_and_preserves_the_prepared_mask(self):
+        self.app.io.removal_locator.return_value = b"red locator"
+        model = ModelSpec(arch="h3_image", template=H3_IMAGE_EDIT_TEMPLATE, unet="unet", clip1="clip", vae="vae")
+        self.app.resolve_model.return_value = (self.entry, model)
+        self.app.generative_fill(object(), "", "", 1, 1, 25, "chosen", remove=True, as_picked=True)
+        req = self.app.backend.return_value.inpaint.call_args.args[0]
+        self.assertEqual(req.reference_images, (b"red locator",))
+        self.assertIn("<Picture 1>", req.prompt)
+        self.assertTrue(req.h3_removal_locator)
+        self.assertEqual(self.app.io.insert_results.call_args.kwargs["mask_pixels"], self.alpha)
+        graph = workflow.build_fill(
+            req, "original.png", "mask.png", 25, workflow.Capabilities(), reference_refs=("locator.png",)
+        )
+        self.assertEqual(graph["encode"]["inputs"]["images.image_1"], ["reference_2", 0])
+        self.assertNotIn("images.image_2", graph["encode"]["inputs"])
+        self.assertEqual(graph["selection_composite"]["inputs"]["destination"], ["load_image", 0])
+        self.assertEqual(graph["selection_composite"]["inputs"]["mask"], ["selection_support", 0])
 
     def test_ineligible_model_or_failed_clean_plate_never_submits_original_image(self):
         self.entry.capabilities = ("fill", "edit")

@@ -1055,7 +1055,7 @@ async function tick(){
 }
 
 // What a model can run, as catalog.job_hint says it: any fill model can also remove; erasers are marked.
-function detail(r){if(r.template==="sdxl_edit")return "SDXL masked editing · describe the desired result · 75% change strength";if(r.template==="sdxl_inpaint_edit")return "SDXL native inpainting · describe the desired result";if(r.template==="fibo2_edit")return ((r.id||"").endsWith("-heretic")?"Heretic NVFP4 encoder":"Original BF16 encoder")+" · instruction editing · selected area or whole image";
+function detail(r){if(r.template==="h3_image_edit")return "Six steps · instruction editing · selected area or whole image";if(r.template==="sdxl_edit")return "SDXL masked editing · describe the desired result · 75% change strength";if(r.template==="sdxl_inpaint_edit")return "SDXL native inpainting · describe the desired result";if(r.template==="fibo2_edit")return ((r.id||"").endsWith("-heretic")?"Heretic NVFP4 encoder":"Original BF16 encoder")+" · instruction editing · selected area or whole image";
   if(r.template==="qwen21_edit")return ((r.id||"").endsWith("-lightning-v2-rl")?"Lightning v2 RL · four steps":"Base BF16 checkpoint · 25 steps")+" · instruction editing · selected area or whole image";
   const words={fill:"fill",expand:"expand",txt2img:"create",remove:"remove",edit:"edit"};
   const caps=(r.capabilities||[]).filter(c=>c in words);const list=caps.map(c=>words[c]);

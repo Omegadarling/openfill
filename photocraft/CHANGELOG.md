@@ -5,6 +5,12 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-11-12
+
+- Added MiniMax H3 Image instruction editing and selection-aware removal through compatible existing ComfyUI servers.
+- Both native and browser panels discover H3 when the server has its diffusion model, image VAE and compatible 32B text encoder. The INT8 encoder is preferred when both supported variants are available.
+- H3 edits support reference images and preserve pixels outside the selection. Remove uses the highlighted selection to reconstruct the background, with Keep and Undo available as usual.
+
 ## [0.19.0] - 2026-11-12
 
 - Use **Engine → Find servers** to find running ComfyUI instances, or **Add server** to save an HTTP(S) address or a trusted SSH alias.

@@ -24,6 +24,7 @@ from typing import Any
 from . import caption, comfy_setup, geometry, hardware, local_models, png, quality, ui_text, workflow
 from . import catalog as cat
 from .backend import (
+    H3_IMAGE_EDIT_TEMPLATE,
     QWEN21_EDIT_TEMPLATE,
     SETTINGS_MENU,
     Backend,
@@ -402,6 +403,8 @@ class App:
             self.log.warning("could not queue the live-preview file: %s", err)
 
     def profile_for(self, model: ModelSpec) -> geometry.ModelProfile:
+        if model.effective_template == H3_IMAGE_EDIT_TEMPLATE:
+            return geometry.ModelProfile("h3_image", min_side=768, max_side=2048, min_context=256, multiple=32)
         if model.arch == "fibo2":
             return geometry.ModelProfile("fibo2", min_side=768, max_side=1024, min_context=256, multiple=16)
         if model.effective_template == QWEN21_EDIT_TEMPLATE:
@@ -420,7 +423,9 @@ class App:
     def sampling(self, model: ModelSpec, variations: int, seed: int, denoise: float | None = None) -> Sampling:
         steps, cfg = int(self.settings.steps), float(self.settings.cfg)
         sampler, scheduler = self.settings.sampler, self.settings.scheduler
-        if model.arch == "fibo2":
+        if model.effective_template == H3_IMAGE_EDIT_TEMPLATE:
+            steps, cfg, sampler, scheduler, denoise = 6, 1.0, "euler", "simple", 1.0
+        elif model.arch == "fibo2":
             turbo = "turbo" in model.unet.lower()
             cfg, sampler, scheduler, steps = (1.0 if turbo else 5.0), "euler", "simple", (4 if turbo else 30)
             denoise = 1.0
@@ -514,6 +519,7 @@ class App:
                             "lama_rmbg": "LaMa (Big-LaMa)",
                             "sdxl_eraser": "RORem (SDXL removal)",
                             QWEN21_EDIT_TEMPLATE: "Qwen Image 2.1 Lightning",
+                            H3_IMAGE_EDIT_TEMPLATE: "MiniMax H3 Image",
                         }.get(e.template, "")
                         if self.settings.remote_fibo and "remove" in e.capabilities
                         else ""
@@ -922,12 +928,14 @@ class App:
         fibo_edit = model.effective_template == "fibo2_edit"
         rebuild_background = remote_removal and fibo_edit
         qwen_removal = remote_removal and model.qwen21_lightning
+        h3_removal = remote_removal and model.effective_template == H3_IMAGE_EDIT_TEMPLATE
         if remote_removal and entry is not None and entry.id in self.settings.hidden_models:
             raise BackendError("This removal model is hidden. Choose a visible method.")
         if remote_removal and (
             entry is None
             or "remove" not in entry.capabilities
-            or model.effective_template not in ("fibo2_edit", "lama_rmbg", "sdxl_eraser", QWEN21_EDIT_TEMPLATE)
+            or model.effective_template
+            not in ("fibo2_edit", "lama_rmbg", "sdxl_eraser", QWEN21_EDIT_TEMPLATE, H3_IMAGE_EDIT_TEMPLATE)
         ):
             raise BackendError("Choose an available removal model in Remove.")
         if self.settings.remote_fibo and not remove and entry is not None and "fill" not in entry.capabilities:
@@ -1004,6 +1012,9 @@ class App:
         elif model.effective_template == QWEN21_EDIT_TEMPLATE:
             ww, wh = workflow.qwen21_reference_size(ctx.width, ctx.height)
             ws = geometry.WorkingSize(ww, wh, min(ww / ctx.width, wh / ctx.height))
+        elif model.effective_template == H3_IMAGE_EDIT_TEMPLATE:
+            ww, wh = workflow.h3_image_size(ctx.width, ctx.height)
+            ws = geometry.WorkingSize(ww, wh, min(ww / ctx.width, wh / ctx.height))
         mp = geometry.mask_params(
             target,
             ws.scale,
@@ -1023,6 +1034,12 @@ class App:
             # Erase-trained: their own prompt (what the user typed is not used).
             prompt, negative = workflow.ERASER_PROMPTS.get(model.effective_template, ("", ""))
             strength = 1.0
+        elif h3_removal:
+            prompt = (
+                "Remove the object highlighted in red from <Picture 1>, along with all red highlighting. "
+                "Fill the area with the surrounding background and preserve the rest of the image."
+            )
+            negative = ""
         elif qwen_removal:
             prompt = (
                 "Edit the first photograph. The second photograph marks the unwanted foreground object with translucent red paint. "
@@ -1077,7 +1094,7 @@ class App:
             mask_raw = self.io.prepare_removal_mask(ctx.size, mask_raw)
             mask_png = png.encode(ctx.width, ctx.height, mask_raw, 1)
         layer_mask = mask_raw if remote_removal else None
-        if qwen_removal:
+        if qwen_removal or h3_removal:
             reference_images = (self.io.removal_locator(ctx.size, image_rgba, mask_raw),)
         if selection_edit and auto_feather and auto_feather_percent > 0:
             from .auto_feather import feather_selection
@@ -1129,6 +1146,7 @@ class App:
             color_match=color_match,
             fibo_edit_mode=fibo_mode if fibo_edit else "preserve",
             reference_images=reference_images,
+            h3_removal_locator=h3_removal,
             tiles=plan.tiles,
             refine_tiles=plan.refine_tiles,
             refine_denoise=float(self.settings.refine_denoise),

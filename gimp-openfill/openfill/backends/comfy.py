@@ -41,7 +41,7 @@ ACTIVITY_EXTENSION = 180.0
 # FLUX and Qwen on a partly offloaded 8 GB card ran 87 to 151 s warm (median
 # 112 s); the old 134 to 166 s estimate cut 3 of 31 FLUX runs. Minimum timeout
 # for these families (any progress message still extends the deadline).
-SLOW_ARCHS = ("flux", "qwen_image", "fibo2")
+SLOW_ARCHS = ("flux", "qwen_image", "fibo2", "h3_image")
 SLOW_MODEL_FLOOR = 240.0
 # Model folders searched for the size of a request's model files.
 MODEL_FOLDERS = ("checkpoints", "diffusion_models", "unet", "clip", "text_encoders", "vae", "inpaint")

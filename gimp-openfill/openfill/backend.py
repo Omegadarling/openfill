@@ -21,7 +21,12 @@ CancelCallback = Callable[[], bool]  # polled; True aborts the running job
 QWEN21_EDIT_TEMPLATE = "qwen21_edit"
 QWEN21_FULL_FILE = "qwen_image_2.1_bf16.safetensors"
 QWEN21_LIGHTNING_FILE = "qwen_image_2.1_lightning_v2_rl_bf16.safetensors"
-EDIT_REFERENCE_OPTIONS = {QWEN21_EDIT_TEMPLATE: (15, "<imageN>"), "fibo2_edit": (15, "<image_N>")}
+H3_IMAGE_EDIT_TEMPLATE = "h3_image_edit"
+EDIT_REFERENCE_OPTIONS = {
+    QWEN21_EDIT_TEMPLATE: (15, "<imageN>"),
+    "fibo2_edit": (15, "<image_N>"),
+    H3_IMAGE_EDIT_TEMPLATE: (4, "<Picture N>"),
+}
 
 
 def edit_reference_options(template: str | None) -> tuple[int, str]:
@@ -170,6 +175,7 @@ class InpaintRequest:
     fibo_edit_mode: str = "preserve"  # preserve | replace | background
     # Immutable normalized PNGs in attachment order; the target is separate.
     reference_images: tuple[bytes, ...] = ()
+    h3_removal_locator: bool = False  # use the marked reference as Picture 1, not the unmarked source
 
     @property
     def needs_scaling(self) -> bool:

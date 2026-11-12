@@ -4,7 +4,7 @@ Select, edit, and remove objects in [PhotoCraft](https://github.com/storytold/ph
 
 **[Download the latest PhotoCraft installer](https://github.com/Omegadarling/openfill/releases/latest).** Choose the `openfill-photocraft-*.zip` asset and follow the instructions below for your platform.
 
-The standard tools share the engine from [upstream OpenFill](https://github.com/beckettharriman/openfill). This fork adds reference-guided editing with Qwen Image 2.1 and FIBO 2.0, a single rearrangeable settings panel, and the ability to add to a set of pending variations.
+The standard tools share the engine from [upstream OpenFill](https://github.com/beckettharriman/openfill). This fork adds reference-guided editing with MiniMax H3 Image, Qwen Image 2.1 and FIBO 2.0, a single rearrangeable settings panel, and the ability to add to a set of pending variations.
 
 ## Select an object
 
@@ -74,7 +74,11 @@ If you already maintain an SSH tunnel yourself, save its local HTTP address in *
 
 ## Existing-server models
 
-Edit discovers the supported Qwen and FIBO checkpoints when their companion weights and nodes are available. Use the [managed model catalog](#managed-engine-models) for the original Fill, Remove, Expand, and Create tools.
+Edit discovers the supported MiniMax H3 Image, Qwen and FIBO checkpoints when their companion weights and nodes are available. Use the [managed model catalog](#managed-engine-models) for the original Fill, Remove, Expand, and Create tools.
+
+### MiniMax H3 Image
+
+On an existing ComfyUI server with the native `MiniMaxH3ImageConditioning` node, use `minimax_h3_image_pruned_int8_convrot.safetensors`, `minimax_h3_image_vae_fp16.safetensors`, and either `qwen3vl_32b_minimax_h3_int8_convrot.safetensors` or `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`. INT8 is preferred when both encoders are visible; NVFP4 requires compatible hardware. The model appears in both Edit and Remove. It uses six steps, processes a crop near 4 megapixels, and protects the area outside the selection. For Remove, a red-highlighted reference identifies the selected object. Inspect the result: reconstructed content can vary. This discovery applies to existing servers; managed-engine installation does not install these files. [Model files](https://huggingface.co/Comfy-Org/MiniMax-H3-Image)
 
 ### Qwen Image 2.1
 
@@ -107,7 +111,7 @@ For SDXL out of the box, use the [managed engine](#managed-engine-models). Edit 
 
 ### Reference images and panel layout
 
-Choose a reference-capable model and use **Reference Images** to attach up to 15 PNG, JPEG, or WebP files. Drop files onto the reference drop area in the Windows panel or browser view, or click **Add reference images** to choose them. The target document is image 1. In a Qwen prompt, use `<image2>`, `<image3>`, and so on for the attachments. FIBO uses `<image_2>`, `<image_3>`, and so on. The reference list shows the current labels and supports reordering and removal. Attachments are kept for the current companion session.
+Choose a reference-capable model and use **Reference Images** to attach up to 15 PNG, JPEG, or WebP files (four for MiniMax H3 Image). Drop files onto the reference drop area in the Windows panel or browser view, or click **Add reference images** to choose them. The target document is image 1. In a Qwen prompt, use `<image2>`, `<image3>`, and so on for the attachments. FIBO uses `<image_2>`, `<image_3>`, and so on. MiniMax H3 Image uses `<Picture 1>` for the target and `<Picture 2>`, `<Picture 3>`, and so on for attachments. The reference list shows the current labels and supports reordering and removal. Attachments are kept for the current companion session.
 
 Open **Manage Models** to control which models appear in the main dropdown. Click a section header to expand or collapse it, or drag its grip to move the section. OpenFill saves the section order, collapsed state, and model visibility in your profile.
 

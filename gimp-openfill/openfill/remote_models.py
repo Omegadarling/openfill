@@ -11,7 +11,13 @@ import threading
 import time
 from pathlib import PurePosixPath
 
-from .backend import QWEN21_EDIT_TEMPLATE, QWEN21_FULL_FILE, QWEN21_LIGHTNING_FILE, BackendUnavailable
+from .backend import (
+    H3_IMAGE_EDIT_TEMPLATE,
+    QWEN21_EDIT_TEMPLATE,
+    QWEN21_FULL_FILE,
+    QWEN21_LIGHTNING_FILE,
+    BackendUnavailable,
+)
 from .catalog import FileSpec, ModelEntry
 from .comfy_api import ComfyClient
 
@@ -26,6 +32,56 @@ LAMA_ID = "remote-lama-rmbg"
 ROREM_ID = "remote-rorem-sdxl"
 QWEN21_ENCODER = "qwen3vl_8b_fp8_scaled.safetensors"
 QWEN21_VAE = "qwen_image_2.1_vae_bf16.safetensors"
+H3_IMAGE_ID = "remote-minimax-h3-image"
+
+
+def _discover_h3_image(client: ComfyClient, source_label: str) -> list[ModelEntry]:
+    """Only offer H3 when the native node and every compatible model are visible."""
+    unet = _filename(
+        _options(client.object_info("UNETLoader"), "UNETLoader", "unet_name"),
+        "minimax_h3_image_pruned_int8_convrot.safetensors",
+    )
+    if not unet or not client.object_info("MiniMaxH3ImageConditioning").get("MiniMaxH3ImageConditioning"):
+        return []
+    clip_info = client.object_info("CLIPLoader")
+    if "minimax" not in _options(clip_info, "CLIPLoader", "type"):
+        return []
+    clips = _options(clip_info, "CLIPLoader", "clip_name")
+    # INT8 works on Ada and Blackwell; NVFP4 requires a supported GPU path.
+    encoder = _filename(clips, "qwen3vl_32b_minimax_h3_int8_convrot.safetensors") or _filename(
+        clips, "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+    )
+    vae = _filename(
+        _options(client.object_info("VAELoader"), "VAELoader", "vae_name"), "minimax_h3_image_vae_fp16.safetensors"
+    )
+    if not encoder or not vae:
+        return []
+    return [
+        ModelEntry(
+            id=H3_IMAGE_ID,
+            name=f"MiniMax H3 Image · {source_label}",
+            tier="edit",
+            capabilities=("fill", "edit", "remove"),
+            arch="h3_image",
+            template=H3_IMAGE_EDIT_TEMPLATE,
+            page="https://huggingface.co/Comfy-Org/MiniMax-H3-Image",
+            license_name="MiniMax H3 Image license",
+            license_url="https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE",
+            gated=False,
+            source_type="first-party",
+            uploader="Comfy-Org (MiniMax)",
+            min_vram_gb=24,
+            requires_nodes=(),
+            requires_models=(),
+            source="remote",
+            family="h3-image",
+            files=(
+                FileSpec("unet", "", "diffusion_models/" + unet),
+                FileSpec("clip1", "", "text_encoders/" + encoder),
+                FileSpec("vae", "", "vae/" + vae),
+            ),
+        )
+    ]
 
 
 def _options(info: dict, node: str, field: str) -> list[str]:
@@ -287,6 +343,7 @@ def discover(client: ComfyClient, source_label: str = "Local ComfyUI") -> list[M
         ("FIBO", _discover_fibo),
         ("SDXL", discover_sdxl),
         ("Qwen Image 2.1", _discover_qwen21),
+        ("MiniMax H3 Image", _discover_h3_image),
         ("LaMa", _discover_lama),
         ("RORem", _discover_rorem),
     ):
